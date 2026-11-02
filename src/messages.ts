@@ -3,10 +3,14 @@ export type Lang = 'ja' | 'en';
 export const messages = {
   ja: {
     appTitle: "Audio Player NG",
-    appSub: "キー & テンポ 練習用プレイヤー (Signalsmith Wasm搭載)",
+    appSub: "可変ピッチ & スピード、Signalsmith Wasm使用",
     dropZoneText: "音声/動画ファイルを選択 または ドラッグ＆ドロップ",
     dropZoneSub: "MP3, WAV, AAC, M4A, MP4, WebM 等",
-    keyTitle: "キー (半音)",
+    androidTip: "💡 Android/Galaxy: ファイル選択で「写真と動画」を選ぶと Google ドライブ内の音声も選択できます",
+    unsupportedTitle: "⚠️ お使いのブラウザは非対応です",
+    unsupportedMsg: "この端末/ブラウザは最新のオーディオ処理(AudioWorklet/Wasm)に対応していません。",
+    legacyBtn: "旧バージョン(レガシー版)を開く",
+    keyTitle: "ピッチ (半音)",
     centsTitle: "微調整 (セント)",
     totalPitch: "計",
     preset440: "A = 440Hz (±0¢)",
@@ -28,12 +32,17 @@ export const messages = {
     exportBtn: "WAV書き出し",
     exporting: "レンダリング中...",
     exportSuccess: "書き出し完了！",
+    version: "バージョン",
   },
   en: {
     appTitle: "Audio Player NG",
-    appSub: "Key & Tempo Changer for Practice (Powered by Signalsmith)",
+    appSub: "Variable pitch/speed, powered by Signalsmith Wasm",
     dropZoneText: "Select or drop audio/video file",
     dropZoneSub: "MP3, WAV, AAC, M4A, MP4, WebM etc.",
+    androidTip: "💡 Android/Galaxy: Select 'Photos & Videos' to choose audio files from Google Drive",
+    unsupportedTitle: "⚠️ Unsupported Browser/Device",
+    unsupportedMsg: "Your browser does not support modern Web Audio features (AudioWorklet/Wasm).",
+    legacyBtn: "Open Legacy Player",
     keyTitle: "Pitch (Semitones)",
     centsTitle: "Fine Tune (Cents)",
     totalPitch: "Total",
@@ -56,6 +65,7 @@ export const messages = {
     exportBtn: "Export WAV",
     exporting: "Rendering...",
     exportSuccess: "Export Completed!",
+    version: "Version",
   }
 };
 
@@ -72,4 +82,13 @@ export const formatTime = (secs: number): string => {
   const s = Math.floor(secs % 60);
   const ms = Math.floor((secs % 1) * 10);
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${ms}`;
+};
+
+// 動作環境チェック (AudioWorklet と WebAssembly のサポート判定)
+export const checkCompatibility = (): boolean => {
+  if (typeof window === 'undefined') return true;
+  const hasAudioContext = 'AudioContext' in window || 'webkitAudioContext' in window;
+  const hasWorklet = 'AudioWorkletNode' in window;
+  const hasWasm = typeof WebAssembly === 'object' && typeof WebAssembly.instantiate === 'function';
+  return hasAudioContext && hasWorklet && hasWasm;
 };

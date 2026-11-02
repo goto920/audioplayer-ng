@@ -1,16 +1,20 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   Play, Pause, RotateCcw, Volume2, VolumeX, Upload, Globe, 
-  RotateCcw as RewindIcon, RotateCw as FastForwardIcon, Repeat, Download, Loader2 
+  RotateCcw as RewindIcon, RotateCw as FastForwardIcon, Repeat, Download, Loader2,
+  ExternalLink, Info
 } from 'lucide-react';
 
-import { messages, getDefaultLang, formatTime } from './messages';
+import { messages, getDefaultLang, formatTime, checkCompatibility } from './messages';
 import type { Lang } from './messages';
 import { AudioEngine } from './engine/AudioEngine';
 
 export default function App() {
   const [lang, setLang] = useState<Lang>(getDefaultLang);
   const t = messages[lang];
+
+  // 互換性チェック (古いブラウザ判定)
+  const [isSupported] = useState<boolean>(checkCompatibility);
 
   const [fileLoaded, setFileLoaded] = useState(false);
   const [fileName, setFileName] = useState('');
@@ -34,14 +38,14 @@ export default function App() {
 
   const isDraggingRef = useRef(false);
   const loopTimeoutRef = useRef<number | null>(null);
-  const isWaitingLoopRef = useRef(false); // ← 二重発火防止フラグを追加！
+  const isWaitingLoopRef = useRef(false);
 
-  // AudioEngine インスタンスの生成 (Ref で保持)
+  // AudioEngine インスタンス
   const engineRef = useRef<AudioEngine | null>(null);
-  if (!engineRef.current) {
+  if (!engineRef.current && isSupported) {
     engineRef.current = new AudioEngine({
       onTimeUpdate: (time) => {
-        if (!isDraggingRef.current) {
+        if (!isDraggingRef.current && !isWaitingLoopRef.current) {
           setCurrentTime(time);
         }
       },
@@ -52,7 +56,6 @@ export default function App() {
   }
   const engine = engineRef.current;
 
-  // 待機タイマーの完全クリア用関数
   const clearLoopTimeout = () => {
     if (loopTimeoutRef.current) {
       clearTimeout(loopTimeoutRef.current);
@@ -62,14 +65,14 @@ export default function App() {
     setLoopCountdown(null);
   };
 
-  // A-B ループ終端到達時の処理
   const handleEndReached = () => {
-    if (isWaitingLoopRef.current) return; // 待機中なら何もしない
+    if (isWaitingLoopRef.current) return;
 
-    if (isLoopEnabled) {
+    if (isLoopEnabled && engine) {
       isWaitingLoopRef.current = true;
       engine.pause();
       setIsPlaying(false);
+      
       setCurrentTime(loopA);
       setLoopCountdown(2);
 
@@ -77,33 +80,29 @@ export default function App() {
         if (isWaitingLoopRef.current) setLoopCountdown(1);
       }, 1000);
 
-      loopTimeoutRef.current = window.setTimeout(() => {
+      loopTimeoutRef.current = window.setTimeout(async () => {
         setLoopCountdown(null);
         isWaitingLoopRef.current = false;
-        engine.play(loopA);
+        await engine.play(loopA);
         setIsPlaying(true);
       }, 2000);
     } else {
-      engine.pause();
+      if (engine) engine.pause();
       setIsPlaying(false);
     }
   };
 
-  // ループ B点 超過チェック (再生中)
   useEffect(() => {
     if (isPlaying && isLoopEnabled && !isWaitingLoopRef.current && currentTime >= loopB) {
       handleEndReached();
     }
   }, [currentTime, isPlaying, isLoopEnabled, loopB]);
 
-  // ファイル読み込み
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || !engine) return;
 
     clearLoopTimeout();
-
-    if (loopTimeoutRef.current) clearTimeout(loopTimeoutRef.current);
 
     const loadedName = await engine.loadFile(file);
     setFileName(loadedName);
@@ -113,11 +112,10 @@ export default function App() {
     setLoopB(engine.duration);
     setFileLoaded(true);
     setIsPlaying(false);
-    setLoopCountdown(null);
   };
 
-  // 再生 / 一時停止
   const togglePlay = async () => {
+    if (!engine) return;
     if (isPlaying || isWaitingLoopRef.current) {
       clearLoopTimeout();
       engine.pause();
@@ -125,35 +123,33 @@ export default function App() {
     } else {
       clearLoopTimeout();
       const startPos = (currentTime >= loopB - 0.1 || currentTime >= duration - 0.1) ? loopA : currentTime;
+      setCurrentTime(startPos);
       await engine.play(startPos);
       setIsPlaying(true);
     }
   };
 
-  // シーク
   const handleSeek = (time: number) => {
+    if (!engine) return;
     clearLoopTimeout();
     setCurrentTime(time);
     engine.seek(time);
   };
 
-  // ピッチ更新
   const updatePitch = (semi: number, cnt: number) => {
     setSemitones(semi);
     setCents(cnt);
-    engine.setPitch(semi, cnt);
+    if (engine) engine.setPitch(semi, cnt);
   };
 
-  // テンポ更新
   const handleTempoChange = (newTempo: number) => {
     setTempo(newTempo);
-    engine.setTempo(newTempo);
+    if (engine) engine.setTempo(newTempo);
   };
 
-  // 音量更新
   const handleVolumeChange = (newVol: number) => {
     setVolume(newVol);
-    engine.setVolume(newVol);
+    if (engine) engine.setVolume(newVol);
   };
 
   const toggleMute = () => {
@@ -165,9 +161,8 @@ export default function App() {
     }
   };
 
-  // WAV エクスポート
   const exportAudio = async () => {
-    if (isExporting) return;
+    if (isExporting || !engine) return;
     if (isPlaying) {
       engine.pause();
       setIsPlaying(false);
@@ -178,11 +173,8 @@ export default function App() {
     try {
       const startSec = isLoopEnabled ? loopA : 0;
       const endSec = isLoopEnabled ? loopB : duration;
-
-      // オフラインレンダリング実行
       const wavBlob = await engine.exportWav(startSec, endSec);
 
-      // ダウンロード実行
       const url = URL.createObjectURL(wavBlob);
       const a = document.createElement('a');
       const baseName = fileName.replace(/\.[^/.]+$/, "");
@@ -221,20 +213,46 @@ export default function App() {
           </button>
         </div>
 
-        {/* ファイル選択 */}
-        <label className="flex flex-col items-center justify-center p-6 border-2 border-dashed border-slate-600 rounded-xl cursor-pointer hover:border-indigo-400 hover:bg-slate-700/50 transition">
-          <Upload className="w-8 h-8 text-slate-400 mb-2" />
-          <span className="text-sm font-medium text-slate-300 text-center truncate max-w-xs sm:max-w-md">
-            {fileName || t.dropZoneText}
-          </span>
-          <span className="text-xs text-slate-500 mt-1">{t.dropZoneSub}</span>
-          <input
-            type="file"
-            accept="audio/*,.wav,.mp3,.aac,.m4a,.opus,.webm,video/*,.mp4" 
-            className="hidden"
-            onChange={handleFileChange}
-          />
-        </label>
+        {/* 非対応ブラウザ警告バナー */}
+        {!isSupported && (
+          <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl flex flex-col gap-2.5">
+            <div className="font-bold text-amber-400 text-sm">{t.unsupportedTitle}</div>
+            <p className="text-xs text-slate-300 leading-relaxed">{t.unsupportedMsg}</p>
+            <a
+              href="https://goto920.github.io/demos/variableplayer/"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold rounded-lg text-xs transition"
+            >
+              <span>{t.legacyBtn}</span>
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          </div>
+        )}
+
+        {/* ファイル選択エリア */}
+        <div className="flex flex-col gap-2">
+          <label className="flex flex-col items-center justify-center p-6 border-2 border-dashed border-slate-600 rounded-xl cursor-pointer hover:border-indigo-400 hover:bg-slate-700/50 transition">
+            <Upload className="w-8 h-8 text-slate-400 mb-2" />
+            <span className="text-sm font-medium text-slate-300 text-center truncate max-w-xs sm:max-w-md">
+              {fileName || t.dropZoneText}
+            </span>
+            <span className="text-xs text-slate-500 mt-1">{t.dropZoneSub}</span>
+            <input
+              type="file"
+              accept="audio/*,.wav,.mp3,.aac,.m4a,.opus,.webm,video/*,.mp4"
+              className="hidden"
+              onChange={handleFileChange}
+              disabled={!isSupported}
+            />
+          </label>
+
+          {/* Android / Galaxy 向けヒント表示 */}
+          <div className="flex items-start gap-1.5 px-2 text-[11px] text-slate-400 leading-tight">
+            <Info className="w-3.5 h-3.5 text-indigo-400 shrink-0 mt-0.5" />
+            <span>{t.androidTip}</span>
+          </div>
+        </div>
 
         {fileLoaded && (
           <div className="flex flex-col gap-5 animate-fade-in">
@@ -249,7 +267,6 @@ export default function App() {
                   </span>
                 </div>
 
-                {/* ループ待機中カウントダウン (loopCountdown を使用) */}
                 {loopCountdown !== null && (
                   <div className="text-xs font-semibold text-amber-400 animate-pulse bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded-md">
                     {t.loopWait.replace('{sec}', String(loopCountdown))}
@@ -257,7 +274,6 @@ export default function App() {
                 )}
               </div>
 
-              {/* WAVエクスポートボタン */}
               <button
                 onClick={exportAudio}
                 disabled={isExporting}
@@ -623,6 +639,13 @@ export default function App() {
 
           </div>
         )}
+
+        {/* フッター: 自動生成ビルドバージョン */}
+        <div className="border-t border-slate-700/60 pt-3 flex justify-between items-center text-[11px] text-slate-500">
+          <span>Audio Player Next Generation</span>
+          <span className="font-mono">{__BUILD_VERSION__}</span>
+        </div>
+
       </div>
     </div>
   );
