@@ -207,7 +207,7 @@ export default function App() {
           <span className="text-xs text-slate-500 mt-1">{t.dropZoneSub}</span>
           <input
             type="file"
-            accept="audio/*,video/*"
+            accept="audio/*,.wav,.mp3,.aac,.m4a,.opus,.webm,video/*,.mp4" 
             className="hidden"
             onChange={handleFileChange}
           />
