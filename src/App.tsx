@@ -4,8 +4,8 @@ import {
   RotateCcw as RewindIcon, RotateCw as FastForwardIcon, Repeat, Download, Loader2 
 } from 'lucide-react';
 
-import type { Lang } from './messages';
 import { messages, getDefaultLang, formatTime } from './messages';
+import type { Lang } from './messages';
 import { AudioEngine } from './engine/AudioEngine';
 
 export default function App() {
@@ -218,14 +218,23 @@ export default function App() {
 
             {/* 時間表示 ＆ エクスポートボタン */}
             <div className="flex justify-between items-center px-1">
-              <div className="font-mono text-2xl font-bold text-white tracking-wider">
-                {formatTime(currentTime)}
-                <span className="text-sm font-normal text-slate-400 ml-2">
-                  / {formatTime(duration)}
-                </span>
+              <div className="flex items-baseline gap-2">
+                <div className="font-mono text-2xl font-bold text-white tracking-wider">
+                  {formatTime(currentTime)}
+                  <span className="text-sm font-normal text-slate-400 ml-2">
+                    / {formatTime(duration)}
+                  </span>
+                </div>
+
+                {/* ループ待機中カウントダウン (loopCountdown を使用) */}
+                {loopCountdown !== null && (
+                  <div className="text-xs font-semibold text-amber-400 animate-pulse bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded-md">
+                    {t.loopWait.replace('{sec}', String(loopCountdown))}
+                  </div>
+                )}
               </div>
 
-              {/* WAVエクスポート */}
+              {/* WAVエクスポートボタン */}
               <button
                 onClick={exportAudio}
                 disabled={isExporting}
