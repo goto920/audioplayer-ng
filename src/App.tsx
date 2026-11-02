@@ -34,6 +34,7 @@ export default function App() {
 
   const isDraggingRef = useRef(false);
   const loopTimeoutRef = useRef<number | null>(null);
+  const isWaitingLoopRef = useRef(false); // ← 二重発火防止フラグを追加！
 
   // AudioEngine インスタンスの生成 (Ref で保持)
   const engineRef = useRef<AudioEngine | null>(null);
@@ -51,17 +52,34 @@ export default function App() {
   }
   const engine = engineRef.current;
 
+  // 待機タイマーの完全クリア用関数
+  const clearLoopTimeout = () => {
+    if (loopTimeoutRef.current) {
+      clearTimeout(loopTimeoutRef.current);
+      loopTimeoutRef.current = null;
+    }
+    isWaitingLoopRef.current = false;
+    setLoopCountdown(null);
+  };
+
   // A-B ループ終端到達時の処理
   const handleEndReached = () => {
+    if (isWaitingLoopRef.current) return; // 待機中なら何もしない
+
     if (isLoopEnabled) {
+      isWaitingLoopRef.current = true;
       engine.pause();
       setIsPlaying(false);
-      setCurrentTime(loopB);
+      setCurrentTime(loopA);
       setLoopCountdown(2);
 
-      setTimeout(() => setLoopCountdown(1), 1000);
+      setTimeout(() => {
+        if (isWaitingLoopRef.current) setLoopCountdown(1);
+      }, 1000);
+
       loopTimeoutRef.current = window.setTimeout(() => {
         setLoopCountdown(null);
+        isWaitingLoopRef.current = false;
         engine.play(loopA);
         setIsPlaying(true);
       }, 2000);
@@ -73,7 +91,7 @@ export default function App() {
 
   // ループ B点 超過チェック (再生中)
   useEffect(() => {
-    if (isPlaying && isLoopEnabled && currentTime >= loopB) {
+    if (isPlaying && isLoopEnabled && !isWaitingLoopRef.current && currentTime >= loopB) {
       handleEndReached();
     }
   }, [currentTime, isPlaying, isLoopEnabled, loopB]);
@@ -82,6 +100,8 @@ export default function App() {
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    clearLoopTimeout();
 
     if (loopTimeoutRef.current) clearTimeout(loopTimeoutRef.current);
 
@@ -98,10 +118,12 @@ export default function App() {
 
   // 再生 / 一時停止
   const togglePlay = async () => {
-    if (isPlaying) {
+    if (isPlaying || isWaitingLoopRef.current) {
+      clearLoopTimeout();
       engine.pause();
       setIsPlaying(false);
     } else {
+      clearLoopTimeout();
       const startPos = (currentTime >= loopB - 0.1 || currentTime >= duration - 0.1) ? loopA : currentTime;
       await engine.play(startPos);
       setIsPlaying(true);
@@ -110,6 +132,7 @@ export default function App() {
 
   // シーク
   const handleSeek = (time: number) => {
+    clearLoopTimeout();
     setCurrentTime(time);
     engine.seek(time);
   };
