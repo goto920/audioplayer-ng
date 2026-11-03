@@ -1,13 +1,52 @@
 <!doctype html>
-<html lang="en">
+<html lang="ja">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>audioplayer-ng</title>
+    <title>Audio Player NG</title>
   </head>
-  <body>
+  <body class="bg-slate-900 text-slate-100">
     <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+
+    <!-- ★ 古いブラウザ救済用インラインガード (React起動前に純粋HTMLで判定) -->
+    <script>
+      (function() {
+        // AudioWorklet と WebAssembly のサポート判定
+        var isSupported = !!(
+          (window.AudioContext || window.webkitAudioContext) &&
+          window.AudioWorkletNode &&
+          window.WebAssembly
+        );
+
+        if (!isSupported) {
+          // 非対応端末の場合、メインJSを読み込ませずに警告画面を直接描画する
+          var isJa = (navigator.language || '').indexOf('ja') === 0;
+          var title = isJa ? '⚠️ お使いの端末/ブラウザは非対応です' : '⚠️ Unsupported Device/Browser';
+          var desc = isJa 
+            ? 'この端末(iOS 12など)は最新のAudioWorklet/Wasmに対応していません。旧世代端末向けに最適化されたレガシー版をご利用ください。'
+            : 'Your browser does not support modern Web Audio features. Please use the Legacy Player optimized for older devices.';
+          var btnText = isJa ? 'レガシー版プレイヤーを開く' : 'Open Legacy Player';
+
+          var html = '<div style="max-width: 500px; margin: 40px auto; padding: 24px; background: #1e293b; border-radius: 16px; border: 1px solid #d97706; font-family: sans-serif; text-align: center; color: #f8fafc;">' +
+            '<h2 style="color: #fbbf24; font-size: 18px; margin-bottom: 12px;">' + title + '</h2>' +
+            '<p style="font-size: 13px; line-height: 1.6; color: #cbd5e1; margin-bottom: 24px;">' + desc + '</p>' +
+            '<a href="https://goto920.github.io/variable-speed-pitch-audio-player/" style="display: inline-block; padding: 12px 24px; background: #d97706; color: #0f172a; font-weight: bold; font-size: 14px; text-decoration: none; border-radius: 8px;">' + btnText + '</a>' +
+            '</div>';
+
+          document.getElementById('root').innerHTML = html;
+
+          // メインJSの実行を完全に阻止するため、以降のスクリプト読み込みを停止
+          window.__STOP_APP__ = true;
+        }
+      })();
+    </script>
+
+    <!-- メインのスクリプト (非対応端末ではガードにより無視されます) -->
+    <script type="module">
+      if (!window.__STOP_APP__) {
+        import('./src/main.tsx');
+      }
+    </script>
   </body>
 </html>
