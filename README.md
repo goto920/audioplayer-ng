@@ -95,8 +95,9 @@ npm run preview
 
 # 自動ビルド & gh-pages ブランチへのデプロイ
 npm run deploy
+```
 
-📄 ライセンス (License)
+## ライセンス (License)
 
 このプロジェクトは MIT License のもとで公開されています。
 
