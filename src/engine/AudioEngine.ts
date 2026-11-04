@@ -1,6 +1,7 @@
 // @ts-ignore
 import SignalsmithStretch from 'signalsmith-stretch';
 import { audioBufferToWavBlob } from '../lib/wav';
+import { audioBufferToMp3Blob } from '../lib/mp3';
 
 export interface AudioEngineCallbacks {
   onTimeUpdate: (currentTime: number) => void;
@@ -26,6 +27,11 @@ export class AudioEngine {
 
   constructor(callbacks: AudioEngineCallbacks) {
     this.callbacks = callbacks;
+  }
+
+  // 波形描画用の AudioBuffer ゲッター
+  public get rawAudioBuffer(): AudioBuffer | null {
+    return this.audioBuffer;
   }
 
   // ピッチの合計値 (半音 + セント/100)
@@ -208,5 +214,44 @@ export class AudioEngine {
     // C++ レベルで高速レンダリング
     const renderedAudioBuffer = await offlineCtx.startRendering();
     return audioBufferToWavBlob(renderedAudioBuffer);
+  }
+
+// 高速オフライン書き出し (MP3版)
+  public async exportMp3(startSec: number, endSec: number, kbps = 192): Promise<Blob> {
+    if (!this.audioBuffer || this.channelBuffers.length === 0) {
+      throw new Error("No audio buffer loaded");
+    }
+
+    const durationToRender = (endSec - startSec) / this.tempo;
+    const sampleRate = this.audioBuffer.sampleRate;
+    const numChannels = this.audioBuffer.numberOfChannels;
+    const totalFrames = Math.ceil(durationToRender * sampleRate);
+
+    const OfflineCtx = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
+    const offlineCtx = new OfflineCtx(numChannels, totalFrames, sampleRate);
+
+    // オフライン用 Signalsmith ノード
+    // @ts-ignore
+    const SignalsmithStretch = (await import('signalsmith-stretch')).default;
+    const offlineStretch = await SignalsmithStretch(offlineCtx);
+    await offlineStretch.addBuffers(this.channelBuffers);
+
+    const gainNode = offlineCtx.createGain();
+    gainNode.gain.value = this.volume <= -40 ? 0 : Math.pow(10, this.volume / 20);
+
+    offlineStretch.connect(gainNode);
+    gainNode.connect(offlineCtx.destination);
+
+    offlineStretch.schedule({
+      output: 0,
+      active: true,
+      input: startSec,
+      rate: this.tempo,
+      semitones: this.totalPitch
+    });
+
+    const renderedAudioBuffer = await offlineCtx.startRendering();
+    // ★ ここで MP3 に変換！
+    return audioBufferToMp3Blob(renderedAudioBuffer, kbps);
   }
 }

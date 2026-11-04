@@ -8,18 +8,21 @@ import {
 import { messages, getDefaultLang, formatTime, checkCompatibility } from './messages';
 import type { Lang } from './messages';
 import { AudioEngine } from './engine/AudioEngine';
+import { Waveform } from './components/Waveform'; // ★ 波形コンポーネントのインポート
 
 export default function App() {
   const [lang, setLang] = useState<Lang>(getDefaultLang);
   const t = messages[lang];
 
-  // 互換性チェック (古いブラウザ判定)
   const [isSupported] = useState<boolean>(checkCompatibility);
 
   const [fileLoaded, setFileLoaded] = useState(false);
   const [fileName, setFileName] = useState('');
   const [isPlaying, setIsPlaying] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  
+  const [exportFormat, setExportFormat] = useState<'mp3' | 'wav'>('mp3');
+
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
 
@@ -36,7 +39,6 @@ export default function App() {
   const [volume, setVolume] = useState(-6);
   const [prevVolume, setPrevVolume] = useState(-6);
 
-  const isDraggingRef = useRef(false);
   const loopTimeoutRef = useRef<number | null>(null);
   const isWaitingLoopRef = useRef(false);
 
@@ -45,7 +47,7 @@ export default function App() {
   if (!engineRef.current && isSupported) {
     engineRef.current = new AudioEngine({
       onTimeUpdate: (time) => {
-        if (!isDraggingRef.current && !isWaitingLoopRef.current) {
+        if (!isWaitingLoopRef.current) {
           setCurrentTime(time);
         }
       },
@@ -161,7 +163,7 @@ export default function App() {
     }
   };
 
-  const exportAudio = async () => {
+  const handleExport = async () => {
     if (isExporting || !engine) return;
     if (isPlaying) {
       engine.pause();
@@ -173,9 +175,15 @@ export default function App() {
     try {
       const startSec = isLoopEnabled ? loopA : 0;
       const endSec = isLoopEnabled ? loopB : duration;
-      const wavBlob = await engine.exportWav(startSec, endSec);
 
-      const url = URL.createObjectURL(wavBlob);
+      let blob: Blob;
+      if (exportFormat === 'mp3') {
+        blob = await engine.exportMp3(startSec, endSec, 192);
+      } else {
+        blob = await engine.exportWav(startSec, endSec);
+      }
+
+      const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       const baseName = fileName.replace(/\.[^/.]+$/, "");
       const pitchStr = engine.totalPitch >= 0 ? `+${engine.totalPitch.toFixed(2)}` : engine.totalPitch.toFixed(2);
@@ -183,7 +191,7 @@ export default function App() {
       const rangeStr = isLoopEnabled ? `_AB(${formatTime(startSec)}-${formatTime(endSec)})` : '';
       
       a.href = url;
-      a.download = `${baseName}_key${pitchStr}_tempo${tempoStr}%${rangeStr}.wav`;
+      a.download = `${baseName}_key${pitchStr}_tempo${tempoStr}%${rangeStr}.${exportFormat}`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
@@ -213,13 +221,13 @@ export default function App() {
           </button>
         </div>
 
-        {/* 非対応ブラウザ警告バナー */}
+        {/* 非対応ブラウザ警告 */}
         {!isSupported && (
           <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl flex flex-col gap-2.5">
             <div className="font-bold text-amber-400 text-sm">{t.unsupportedTitle}</div>
             <p className="text-xs text-slate-300 leading-relaxed">{t.unsupportedMsg}</p>
             <a
-              href="https://goto920.github.io/demos/variableplayer/"
+              href="https://goto920.github.io/variable-speed-pitch-audio-player/"
               target="_blank"
               rel="noreferrer"
               className="inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold rounded-lg text-xs transition"
@@ -230,7 +238,7 @@ export default function App() {
           </div>
         )}
 
-        {/* ファイル選択エリア */}
+        {/* ファイル選択 */}
         <div className="flex flex-col gap-2">
           <label className="flex flex-col items-center justify-center p-6 border-2 border-dashed border-slate-600 rounded-xl cursor-pointer hover:border-indigo-400 hover:bg-slate-700/50 transition">
             <Upload className="w-8 h-8 text-slate-400 mb-2" />
@@ -247,7 +255,6 @@ export default function App() {
             />
           </label>
 
-          {/* Android / Galaxy 向けヒント表示 */}
           <div className="flex items-start gap-1.5 px-2 text-[11px] text-slate-400 leading-tight">
             <Info className="w-3.5 h-3.5 text-indigo-400 shrink-0 mt-0.5" />
             <span>{t.androidTip}</span>
@@ -257,7 +264,7 @@ export default function App() {
         {fileLoaded && (
           <div className="flex flex-col gap-5 animate-fade-in">
 
-            {/* 時間表示 ＆ エクスポートボタン */}
+            {/* 時間表示 ＆ エクスポートコントロール */}
             <div className="flex justify-between items-center px-1">
               <div className="flex items-baseline gap-2">
                 <div className="font-mono text-2xl font-bold text-white tracking-wider">
@@ -274,69 +281,57 @@ export default function App() {
                 )}
               </div>
 
-              <button
-                onClick={exportAudio}
-                disabled={isExporting}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 text-white rounded-lg text-xs font-bold shadow-md active:scale-95 transition"
-                title="WAVファイルとしてダウンロード"
-              >
-                {isExporting ? (
-                  <>
+              {/* エクスポート */}
+              <div className="flex items-center gap-1.5 bg-slate-900/80 p-1 rounded-lg border border-slate-700">
+                <div className="flex text-[11px] font-bold bg-slate-800 rounded p-0.5">
+                  <button
+                    onClick={() => setExportFormat('mp3')}
+                    className={`px-2 py-1 rounded transition ${
+                      exportFormat === 'mp3' ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    MP3
+                  </button>
+                  <button
+                    onClick={() => setExportFormat('wav')}
+                    className={`px-2 py-1 rounded transition ${
+                      exportFormat === 'wav' ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    WAV
+                  </button>
+                </div>
+
+                <button
+                  onClick={handleExport}
+                  disabled={isExporting}
+                  className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 text-white rounded text-xs font-bold shadow active:scale-95 transition"
+                  title={`${exportFormat.toUpperCase()}でダウンロード`}
+                >
+                  {isExporting ? (
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    <span>{t.exporting}</span>
-                  </>
-                ) : (
-                  <>
-                    <Download className="w-3.5 h-3.5" />
-                    <span>{t.exportBtn}</span>
-                  </>
-                )}
-              </button>
-            </div>
-
-            {/* シークバー */}
-            <div className="flex flex-col gap-1.5">
-              <div className="relative w-full h-2 bg-slate-700 rounded-lg overflow-hidden">
-                {duration > 0 && (
-                  <div
-                    className="absolute h-full bg-indigo-500/40 border-x border-indigo-400"
-                    style={{
-                      left: `${(loopA / duration) * 100}%`,
-                      width: `${((loopB - loopA) / duration) * 100}%`
-                    }}
-                  />
-                )}
-                {duration > 0 && (
-                  <div
-                    className="absolute h-full bg-indigo-500 pointer-events-none"
-                    style={{ width: `${(currentTime / duration) * 100}%` }}
-                  />
-                )}
+                  ) : (
+                    <>
+                      <Download className="w-3.5 h-3.5" />
+                      <span>{exportFormat.toUpperCase()}</span>
+                    </>
+                  )}
+                </button>
               </div>
-
-              <input
-                type="range"
-                min="0"
-                max={duration || 1}
-                step="0.05"
-                value={currentTime}
-                onMouseDown={() => { isDraggingRef.current = true; }}
-                onTouchStart={() => { isDraggingRef.current = true; }}
-                onChange={(e) => setCurrentTime(Number(e.target.value))}
-                onMouseUp={(e) => {
-                  isDraggingRef.current = false;
-                  handleSeek(Number((e.target as HTMLInputElement).value));
-                }}
-                onTouchEnd={(e) => {
-                  isDraggingRef.current = false;
-                  handleSeek(Number((e.target as HTMLInputElement).value));
-                }}
-                className="w-full accent-indigo-400 cursor-pointer -mt-3.5 opacity-0 h-5"
-                title="Seek"
-              />
             </div>
 
-            {/* メイン再生コントロール */}
+            {/* ★ ピーク波形シークバー (以前のスライダーから置き換え) */}
+            <Waveform
+              audioBuffer={engine?.rawAudioBuffer || null}
+              currentTime={currentTime}
+              duration={duration}
+              loopA={loopA}
+              loopB={loopB}
+              isLoopEnabled={isLoopEnabled}
+              onSeek={handleSeek}
+            />
+
+            {/* 再生コントロール */}
             <div className="flex justify-center items-center gap-4 py-1">
               <button
                 onClick={() => handleSeek(currentTime - 5)}
@@ -640,7 +635,7 @@ export default function App() {
           </div>
         )}
 
-        {/* フッター: 自動生成ビルドバージョン */}
+        {/* フッター */}
         <div className="border-t border-slate-700/60 pt-3 flex justify-between items-center text-[11px] text-slate-500">
           <span>Audio Player Next Generation</span>
           <span className="font-mono">{__BUILD_VERSION__}</span>
