@@ -22,6 +22,9 @@ export default defineConfig({
   define: {
     __BUILD_VERSION__: JSON.stringify(buildVersion),
   },
+  build: {
+    chunkSizeWarningLimit: 1000, // オーディオ/Wasmエンジン用に1MBまで警告を抑える
+  },
   plugins: [
     react(),
     tailwindcss(),

@@ -19,30 +19,29 @@ export function audioBufferToMp3Blob(buffer: AudioBuffer, kbps = 192): Blob {
   const leftData = floatToInt16(buffer.getChannelData(0));
   const rightData = channels >= 2 ? floatToInt16(buffer.getChannelData(1)) : leftData;
 
-  const sampleBlockSize = 1152; // MP3 エンコードの1ブロック長
-  const mp3Data: Uint8Array[] = [];
+  const sampleBlockSize = 1152;
+  const mp3Data: any[] = [];
 
   for (let i = 0; i < leftData.length; i += sampleBlockSize) {
     const leftChunk = leftData.subarray(i, i + sampleBlockSize);
     const rightChunk = rightData.subarray(i, i + sampleBlockSize);
     
-    let mp3buf: Int8Array;
-    if (channels === 1) {
-      mp3buf = encoder.encodeBuffer(leftChunk);
-    } else {
-      mp3buf = encoder.encodeBuffer(leftChunk, rightChunk);
-    }
+    // 型注釈を外してライブラリの推論に任せる
+    const mp3buf = channels === 1
+      ? encoder.encodeBuffer(leftChunk)
+      : encoder.encodeBuffer(leftChunk, rightChunk);
 
-    if (mp3buf.length > 0) {
-      mp3Data.push(new Uint8Array(mp3buf));
+    if (mp3buf && mp3buf.length > 0) {
+      mp3Data.push(mp3buf);
     }
   }
 
   // 最終ブロックの書き出し
-  const finalMp3buf: Int8Array = encoder.flush();
-  if (finalMp3buf.length > 0) {
-    mp3Data.push(new Uint8Array(finalMp3buf));
+  const finalMp3buf = encoder.flush();
+  if (finalMp3buf && finalMp3buf.length > 0) {
+    mp3Data.push(finalMp3buf);
   }
 
-  return new Blob(mp3Data, { type: 'audio/mp3' });
+  // as any で厳格な BlobPart 型エラーを回避
+  return new Blob(mp3Data as any, { type: 'audio/mp3' });
 }

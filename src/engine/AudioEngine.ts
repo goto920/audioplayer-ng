@@ -232,7 +232,6 @@ export class AudioEngine {
 
     // オフライン用 Signalsmith ノード
     // @ts-ignore
-    const SignalsmithStretch = (await import('signalsmith-stretch')).default;
     const offlineStretch = await SignalsmithStretch(offlineCtx);
     await offlineStretch.addBuffers(this.channelBuffers);
 
