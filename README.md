@@ -101,10 +101,14 @@ npm run deploy
 
 このプロジェクトは MIT License のもとで公開されています。
 
-👏 Credits & Acknowledgments
+### 👏 Credits & Acknowledgments
+
 Author: Kunio Goto (@goto920)
+
 Audio DSP Engine: Signalsmith Stretch by Geraint Luff
+
 MP3 Encoding: LAME / @breezystack/lamejs
+
 Development Assistance: Developed with the assistance of Google Gemini (AI Studio)
 
 以上
