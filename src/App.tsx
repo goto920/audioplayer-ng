@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { 
   Play, Pause, RotateCcw, Volume2, VolumeX, Upload, Globe, 
   RotateCcw as RewindIcon, RotateCw as FastForwardIcon, Repeat, Download, Loader2,
@@ -8,7 +8,7 @@ import {
 import { messages, getDefaultLang, formatTime, checkCompatibility } from './messages';
 import type { Lang } from './messages';
 import { AudioEngine } from './engine/AudioEngine';
-import { Waveform } from './components/Waveform'; // ★ 波形コンポーネントのインポート
+import { Waveform } from './components/Waveform';
 
 export default function App() {
   const [lang, setLang] = useState<Lang>(getDefaultLang);
@@ -42,7 +42,62 @@ export default function App() {
   const loopTimeoutRef = useRef<number | null>(null);
   const isWaitingLoopRef = useRef(false);
 
-  // AudioEngine インスタンス
+  // ★ 最新の設定を常に保持する Ref (古いクロージャ問題を完全に根絶)
+  const isLoopEnabledRef = useRef(isLoopEnabled);
+  const loopARef = useRef(loopA);
+  const loopBRef = useRef(loopB);
+  const durationRef = useRef(duration);
+  useEffect(() => { isLoopEnabledRef.current = isLoopEnabled; }, [isLoopEnabled]);
+  useEffect(() => { loopARef.current = loopA; }, [loopA]);
+  useEffect(() => { loopBRef.current = loopB; }, [loopB]);
+  useEffect(() => { durationRef.current = duration; }, [duration]);
+
+  // 待機タイマーの完全クリア
+  const clearLoopTimeout = useCallback(() => {
+    if (loopTimeoutRef.current) {
+      clearTimeout(loopTimeoutRef.current);
+      loopTimeoutRef.current = null;
+    }
+    isWaitingLoopRef.current = false;
+    setLoopCountdown(null);
+  }, []);
+
+  // ★ A-B ループ終端到達時の処理 (常に最新の Ref を参照)
+  const handleEndReached = useCallback(() => {
+    if (isWaitingLoopRef.current) return;
+
+    const currentLoopEnabled = isLoopEnabledRef.current;
+    const currentA = loopARef.current;
+
+    if (currentLoopEnabled && engineRef.current) {
+      isWaitingLoopRef.current = true;
+      engineRef.current.pause();
+      setIsPlaying(false);
+      
+      setCurrentTime(currentA);
+      setLoopCountdown(2);
+
+      setTimeout(() => {
+        if (isWaitingLoopRef.current) setLoopCountdown(1);
+      }, 1000);
+
+      loopTimeoutRef.current = window.setTimeout(async () => {
+        setLoopCountdown(null);
+        isWaitingLoopRef.current = false;
+        
+        if (engineRef.current) {
+          // iPad対策: 再生前にコンテキストを確実に起こして A点からスタート
+          await engineRef.current.play(currentA);
+          setIsPlaying(true);
+        }
+      }, 2000);
+    } else {
+      if (engineRef.current) engineRef.current.pause();
+      setIsPlaying(false);
+    }
+  }, []);
+
+  // AudioEngine インスタンスの生成
   const engineRef = useRef<AudioEngine | null>(null);
   if (!engineRef.current && isSupported) {
     engineRef.current = new AudioEngine({
@@ -58,47 +113,12 @@ export default function App() {
   }
   const engine = engineRef.current;
 
-  const clearLoopTimeout = () => {
-    if (loopTimeoutRef.current) {
-      clearTimeout(loopTimeoutRef.current);
-      loopTimeoutRef.current = null;
-    }
-    isWaitingLoopRef.current = false;
-    setLoopCountdown(null);
-  };
-
-  const handleEndReached = () => {
-    if (isWaitingLoopRef.current) return;
-
-    if (isLoopEnabled && engine) {
-      isWaitingLoopRef.current = true;
-      engine.pause();
-      setIsPlaying(false);
-      
-      setCurrentTime(loopA);
-      setLoopCountdown(2);
-
-      setTimeout(() => {
-        if (isWaitingLoopRef.current) setLoopCountdown(1);
-      }, 1000);
-
-      loopTimeoutRef.current = window.setTimeout(async () => {
-        setLoopCountdown(null);
-        isWaitingLoopRef.current = false;
-        await engine.play(loopA);
-        setIsPlaying(true);
-      }, 2000);
-    } else {
-      if (engine) engine.pause();
-      setIsPlaying(false);
-    }
-  };
-
+  // ループ B点 超過チェック (再生中)
   useEffect(() => {
     if (isPlaying && isLoopEnabled && !isWaitingLoopRef.current && currentTime >= loopB) {
       handleEndReached();
     }
-  }, [currentTime, isPlaying, isLoopEnabled, loopB]);
+  }, [currentTime, isPlaying, isLoopEnabled, loopB, handleEndReached]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -124,7 +144,9 @@ export default function App() {
       setIsPlaying(false);
     } else {
       clearLoopTimeout();
-      const startPos = (currentTime >= loopB - 0.1 || currentTime >= duration - 0.1) ? loopA : currentTime;
+      const currentA = loopARef.current;
+      const currentB = loopBRef.current;
+      const startPos = (currentTime >= currentB - 0.1 || currentTime >= durationRef.current - 0.1) ? currentA : currentTime;
       setCurrentTime(startPos);
       await engine.play(startPos);
       setIsPlaying(true);
@@ -320,7 +342,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* ★ ピーク波形シークバー (以前のスライダーから置き換え) */}
+            {/* ピーク波形シークバー */}
             <Waveform
               audioBuffer={engine?.rawAudioBuffer || null}
               currentTime={currentTime}
