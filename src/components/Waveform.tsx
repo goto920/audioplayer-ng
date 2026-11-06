@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useMemo } from 'react';
+import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react';
 import { ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 
 interface WaveformProps {
@@ -27,10 +27,8 @@ export const Waveform: React.FC<WaveformProps> = ({
   // ズーム倍率: 1x, 2x, 4x, 8x, 16x, 32x
   const [zoom, setZoom] = useState<number>(1);
 
-  // 基準幅
   const baseWidth = 500;
   const currentWidth = baseWidth * zoom;
-  // ズームに応じたバーの本数 (32倍でも超高解像度)
   const numberOfBars = 150 * zoom;
 
   // ピークデータの事前計算
@@ -111,7 +109,7 @@ export const Waveform: React.FC<WaveformProps> = ({
     ctx.fillRect(cursorX - 1.5, 0, 3, height);
   }, [peaks, currentTime, duration, loopA, loopB, isLoopEnabled]);
 
-  // 再生ヘッドへの自動スクロール追従
+  // 再生ヘッドへの自動スクロール追従 (ドラッグ中は追従を止める)
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container || zoom === 1 || duration === 0 || isDraggingRef.current) return;
@@ -123,25 +121,83 @@ export const Waveform: React.FC<WaveformProps> = ({
     container.scrollLeft = cursorX - containerWidth / 2;
   }, [currentTime, duration, zoom]);
 
-  // クリック / ドラッグによるシーク
-  const handleSeekFromEvent = (clientX: number) => {
+  // ★ 端点スナップ ＆ クランプ計算処理
+  const handleSeekFromEvent = useCallback((clientX: number) => {
     const container = scrollContainerRef.current;
     if (!container || duration === 0) return;
 
     const rect = container.getBoundingClientRect();
+    // 枠外の左や右にマウスが出ても正確なオフセットを算出
     const clickX = clientX - rect.left + container.scrollLeft;
     const totalWidth = container.scrollWidth;
-    const safeX = Math.max(0, Math.min(clickX, totalWidth));
-    const targetTime = (safeX / totalWidth) * duration;
+
+    // 比率から基本の時間を計算
+    let targetTime = (clickX / totalWidth) * duration;
+
+    // ★ ご提案の仕様：左に引っ張りすぎたら 0 または A点にピタッと吸着！
+    if (isLoopEnabled) {
+      if (targetTime <= loopA) {
+        targetTime = loopA; // A点より左はすべて A点に固定
+      } else if (targetTime >= loopB) {
+        targetTime = loopB; // B点より右はすべて B点に固定
+      }
+    } else {
+      if (targetTime <= 0) targetTime = 0;
+      if (targetTime >= duration) targetTime = duration;
+    }
+
     onSeek(targetTime);
+
+    // 拡大時に左端・右端に向かってドラッグしている時は、スクロールも連動させる
+    if (zoom > 1) {
+      if (clientX < rect.left + 40) {
+        container.scrollLeft -= 15; // 左へスクロール
+      } else if (clientX > rect.right - 40) {
+        container.scrollLeft += 15; // 右へスクロール
+      }
+    }
+  }, [duration, isLoopEnabled, loopA, loopB, onSeek, zoom]);
+
+  // ★ マウスが枠外に飛び出してもドラッグを維持するグローバルリスナー
+  const handleStartDrag = (clientX: number) => {
+    isDraggingRef.current = true;
+    handleSeekFromEvent(clientX);
+
+    const onMouseMove = (e: MouseEvent) => {
+      if (isDraggingRef.current) {
+        handleSeekFromEvent(e.clientX);
+      }
+    };
+
+    const onMouseUp = () => {
+      isDraggingRef.current = false;
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
   };
 
-  // ★ 32倍まで拡大可能に
+  const handleTouchStart = (e: React.TouchEvent) => {
+    isDraggingRef.current = true;
+    handleSeekFromEvent(e.touches[0].clientX);
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (isDraggingRef.current) {
+      handleSeekFromEvent(e.touches[0].clientX);
+    }
+  };
+
+  const handleTouchEnd = () => {
+    isDraggingRef.current = false;
+  };
+
   const zoomIn = () => setZoom((prev) => Math.min(prev * 2, 32));
   const zoomOut = () => setZoom((prev) => Math.max(prev / 2, 1));
   const zoomReset = () => setZoom(1);
 
-  // Safari等のCanvas最大幅制限 (16,384px) を超えない安全スケーリング
   const canvasPixelWidth = Math.min(currentWidth * (zoom > 8 ? 1 : 1.5), 16000);
 
   return (
@@ -187,24 +243,10 @@ export const Waveform: React.FC<WaveformProps> = ({
       <div
         ref={scrollContainerRef}
         className="relative w-full h-20 bg-slate-900/90 rounded-xl border border-slate-700/80 overflow-x-auto overflow-y-hidden cursor-pointer select-none"
-        style={{ scrollBehavior: isDraggingRef.current ? 'auto' : 'smooth' }}
-        onMouseDown={(e) => {
-          isDraggingRef.current = true;
-          handleSeekFromEvent(e.clientX);
-        }}
-        onMouseMove={(e) => {
-          if (isDraggingRef.current) handleSeekFromEvent(e.clientX);
-        }}
-        onMouseUp={() => { isDraggingRef.current = false; }}
-        onMouseLeave={() => { isDraggingRef.current = false; }}
-        onTouchStart={(e) => {
-          isDraggingRef.current = true;
-          handleSeekFromEvent(e.touches[0].clientX);
-        }}
-        onTouchMove={(e) => {
-          if (isDraggingRef.current) handleSeekFromEvent(e.touches[0].clientX);
-        }}
-        onTouchEnd={() => { isDraggingRef.current = false; }}
+        onMouseDown={(e) => handleStartDrag(e.clientX)}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
       >
         <canvas
           ref={canvasRef}

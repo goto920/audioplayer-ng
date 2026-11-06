@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { 
   Play, Pause, RotateCcw, Volume2, VolumeX, Upload, Globe, 
   RotateCcw as RewindIcon, RotateCw as FastForwardIcon, Repeat, Download, Loader2,
-  ExternalLink, Info
+  ExternalLink, Info, SkipBack
 } from 'lucide-react';
 
 import { messages, getDefaultLang, formatTime, checkCompatibility } from './messages';
@@ -158,6 +158,12 @@ export default function App() {
     clearLoopTimeout();
     setCurrentTime(time);
     engine.seek(time);
+  };
+
+  // 頭出し (通常時は 0秒、ABループ時は A点 へ)
+  const handleRewindToStart = () => {
+    const target = isLoopEnabled ? loopA : 0;
+    handleSeek(target);
   };
 
   const updatePitch = (semi: number, cnt: number) => {
@@ -355,6 +361,15 @@ export default function App() {
 
             {/* 再生コントロール */}
             <div className="flex justify-center items-center gap-4 py-1">
+
+             <button
+                onClick={handleRewindToStart}
+                className="p-2.5 rounded-full bg-slate-700 hover:bg-slate-600 text-slate-200 active:scale-95 transition"
+                title={isLoopEnabled ? "A点へ頭出し" : "先頭へ頭出し"}
+              >
+                <SkipBack className="w-5 h-5" />
+              </button>
+
               <button
                 onClick={() => handleSeek(currentTime - 5)}
                 className="p-2.5 rounded-full bg-slate-700 hover:bg-slate-600 text-slate-200 active:scale-95 transition"
