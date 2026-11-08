@@ -1,8 +1,8 @@
-import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 
 interface WaveformProps {
-  audioBuffer: AudioBuffer | null;
+  peaks: number[];
   currentTime: number;
   duration: number;
   loopA: number;
@@ -12,7 +12,7 @@ interface WaveformProps {
 }
 
 export const Waveform: React.FC<WaveformProps> = ({
-  audioBuffer,
+  peaks,
   currentTime,
   duration,
   loopA,
@@ -24,36 +24,12 @@ export const Waveform: React.FC<WaveformProps> = ({
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const isDraggingRef = useRef(false);
 
-  // ズーム倍率: 1x, 2x, 4x, 8x, 16x, 32x
   const [zoom, setZoom] = useState<number>(1);
 
   const baseWidth = 500;
   const currentWidth = baseWidth * zoom;
-  const numberOfBars = 150 * zoom;
 
-  // ピークデータの事前計算
-  const peaks = useMemo(() => {
-    if (!audioBuffer) return [];
-
-    const rawData = audioBuffer.getChannelData(0);
-    const totalSamples = rawData.length;
-    const blockSize = Math.floor(totalSamples / numberOfBars);
-    const calculatedPeaks: number[] = [];
-
-    for (let i = 0; i < numberOfBars; i++) {
-      const start = i * blockSize;
-      let max = 0;
-      for (let j = 0; j < blockSize; j += 4) {
-        const val = Math.abs(rawData[start + j] || 0);
-        if (val > max) max = val;
-      }
-      calculatedPeaks.push(Math.pow(max, 0.8));
-    }
-
-    return calculatedPeaks;
-  }, [audioBuffer, numberOfBars]);
-
-  // Canvas の描画
+  // 波形描画
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || peaks.length === 0 || duration === 0) return;
@@ -66,7 +42,6 @@ export const Waveform: React.FC<WaveformProps> = ({
     ctx.clearRect(0, 0, width, height);
 
     const barWidth = width / peaks.length;
-    const playProgress = currentTime / duration;
     const loopAProgress = loopA / duration;
     const loopBProgress = loopB / duration;
 
@@ -74,73 +49,57 @@ export const Waveform: React.FC<WaveformProps> = ({
     if (isLoopEnabled && loopB > loopA) {
       const aX = loopAProgress * width;
       const bX = loopBProgress * width;
-      ctx.fillStyle = 'rgba(99, 102, 241, 0.2)';
+      ctx.fillStyle = 'rgba(99, 102, 241, 0.25)';
       ctx.fillRect(aX, 0, bX - aX, height);
 
-      // A点・B点の縦ライン
-      ctx.fillStyle = 'rgba(129, 140, 248, 0.85)';
+      ctx.fillStyle = 'rgba(129, 140, 248, 0.9)';
       ctx.fillRect(aX, 0, 2, height);
       ctx.fillRect(bX - 2, 0, 2, height);
     }
 
     // 2. 波形バーの描画
+    const renderBarWidth = Math.max(1, Math.min(barWidth * 0.75, 4));
+
     for (let i = 0; i < peaks.length; i++) {
-      const barHeight = Math.max(3, peaks[i] * (height * 0.85));
+      const barHeight = Math.max(2, peaks[i] * (height * 0.88));
       const x = i * barWidth;
       const y = (height - barHeight) / 2;
-      const progress = i / peaks.length;
 
-      if (progress <= playProgress) {
-        ctx.fillStyle = '#818cf8'; // 再生済み: indigo-400
-      } else {
-        ctx.fillStyle = '#475569'; // 未再生: slate-600
-      }
+      ctx.fillStyle = '#64748b'; // slate-500
 
-      const radius = 1.2;
-      const w = Math.max(1, barWidth - 1);
+      const radius = renderBarWidth > 2 ? 1 : 0.5;
       ctx.beginPath();
-      ctx.roundRect(x, y, w, barHeight, radius);
+      ctx.roundRect(x, y, renderBarWidth, barHeight, radius);
       ctx.fill();
     }
+  }, [peaks, duration, loopA, loopB, isLoopEnabled, zoom]);
 
-    // 3. 再生ヘッド
-    const cursorX = playProgress * width;
-    ctx.fillStyle = '#f43f5e'; // rose-500
-    ctx.fillRect(cursorX - 1.5, 0, 3, height);
-  }, [peaks, currentTime, duration, loopA, loopB, isLoopEnabled]);
-
-  // 再生ヘッドへの自動スクロール追従 (ドラッグ中は追従を止める)
+  // ★ 再生位置のスクロール追従 (即時・正確追従)
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container || zoom === 1 || duration === 0 || isDraggingRef.current) return;
 
     const playProgress = currentTime / duration;
-    const cursorX = playProgress * container.scrollWidth;
+    const cursorX = playProgress * currentWidth;
     const containerWidth = container.clientWidth;
 
+    // 赤線が中央(50%)にあるため、cursorX が画面中央に来るようにスクロール
     container.scrollLeft = cursorX - containerWidth / 2;
-  }, [currentTime, duration, zoom]);
+  }, [currentTime, duration, zoom, currentWidth]);
 
-  // ★ 端点スナップ ＆ クランプ計算処理
+  // シーク処理
   const handleSeekFromEvent = useCallback((clientX: number) => {
     const container = scrollContainerRef.current;
     if (!container || duration === 0) return;
 
     const rect = container.getBoundingClientRect();
-    // 枠外の左や右にマウスが出ても正確なオフセットを算出
     const clickX = clientX - rect.left + container.scrollLeft;
-    const totalWidth = container.scrollWidth;
 
-    // 比率から基本の時間を計算
-    let targetTime = (clickX / totalWidth) * duration;
+    let targetTime = (clickX / currentWidth) * duration;
 
-    // ★ ご提案の仕様：左に引っ張りすぎたら 0 または A点にピタッと吸着！
     if (isLoopEnabled) {
-      if (targetTime <= loopA) {
-        targetTime = loopA; // A点より左はすべて A点に固定
-      } else if (targetTime >= loopB) {
-        targetTime = loopB; // B点より右はすべて B点に固定
-      }
+      if (targetTime <= loopA) targetTime = loopA;
+      else if (targetTime >= loopB) targetTime = loopB;
     } else {
       if (targetTime <= 0) targetTime = 0;
       if (targetTime >= duration) targetTime = duration;
@@ -148,25 +107,21 @@ export const Waveform: React.FC<WaveformProps> = ({
 
     onSeek(targetTime);
 
-    // 拡大時に左端・右端に向かってドラッグしている時は、スクロールも連動させる
     if (zoom > 1) {
       if (clientX < rect.left + 40) {
-        container.scrollLeft -= 15; // 左へスクロール
+        container.scrollLeft -= 20;
       } else if (clientX > rect.right - 40) {
-        container.scrollLeft += 15; // 右へスクロール
+        container.scrollLeft += 20;
       }
     }
-  }, [duration, isLoopEnabled, loopA, loopB, onSeek, zoom]);
+  }, [duration, isLoopEnabled, loopA, loopB, onSeek, zoom, currentWidth]);
 
-  // ★ マウスが枠外に飛び出してもドラッグを維持するグローバルリスナー
   const handleStartDrag = (clientX: number) => {
     isDraggingRef.current = true;
     handleSeekFromEvent(clientX);
 
     const onMouseMove = (e: MouseEvent) => {
-      if (isDraggingRef.current) {
-        handleSeekFromEvent(e.clientX);
-      }
+      if (isDraggingRef.current) handleSeekFromEvent(e.clientX);
     };
 
     const onMouseUp = () => {
@@ -179,26 +134,12 @@ export const Waveform: React.FC<WaveformProps> = ({
     window.addEventListener('mouseup', onMouseUp);
   };
 
-  const handleTouchStart = (e: React.TouchEvent) => {
-    isDraggingRef.current = true;
-    handleSeekFromEvent(e.touches[0].clientX);
-  };
-
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (isDraggingRef.current) {
-      handleSeekFromEvent(e.touches[0].clientX);
-    }
-  };
-
-  const handleTouchEnd = () => {
-    isDraggingRef.current = false;
-  };
-
   const zoomIn = () => setZoom((prev) => Math.min(prev * 2, 32));
   const zoomOut = () => setZoom((prev) => Math.max(prev / 2, 1));
   const zoomReset = () => setZoom(1);
 
   const canvasPixelWidth = Math.min(currentWidth * (zoom > 8 ? 1 : 1.5), 16000);
+  const playPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
     <div className="flex flex-col gap-1.5 w-full">
@@ -239,22 +180,51 @@ export const Waveform: React.FC<WaveformProps> = ({
         </div>
       </div>
 
-      {/* スクロールコンテナ */}
-      <div
-        ref={scrollContainerRef}
-        className="relative w-full h-20 bg-slate-900/90 rounded-xl border border-slate-700/80 overflow-x-auto overflow-y-hidden cursor-pointer select-none"
-        onMouseDown={(e) => handleStartDrag(e.clientX)}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
-      >
-        <canvas
-          ref={canvasRef}
-          width={canvasPixelWidth}
-          height={160}
-          style={{ width: `${currentWidth}px`, height: '100%' }}
-          className="block"
-        />
+      {/* スクロールコンテナの親ラッパー */}
+      <div className="relative w-full h-20 bg-slate-900/90 rounded-xl border border-slate-700/80 overflow-hidden">
+        {/* スクロール領域 */}
+        <div
+          ref={scrollContainerRef}
+          className="w-full h-full overflow-x-auto overflow-y-hidden cursor-pointer select-none"
+          onMouseDown={(e) => handleStartDrag(e.clientX)}
+          onTouchStart={(e) => {
+            isDraggingRef.current = true;
+            handleSeekFromEvent(e.touches[0].clientX);
+          }}
+          onTouchMove={(e) => {
+            if (isDraggingRef.current) handleSeekFromEvent(e.touches[0].clientX);
+          }}
+          onTouchEnd={() => { isDraggingRef.current = false; }}
+        >
+          <div style={{ width: `${currentWidth}px`, height: '100%', position: 'relative' }}>
+            <canvas
+              ref={canvasRef}
+              width={canvasPixelWidth}
+              height={160}
+              style={{ width: `${currentWidth}px`, height: '100%' }}
+              className="block pointer-events-none"
+            />
+
+            {/* 1x表示時のみ、通常の移動シークバーとして描画 */}
+            {zoom === 1 && (
+              <div
+                className="absolute top-0 bottom-0 w-0.5 bg-rose-500 pointer-events-none shadow-sm"
+                style={{
+                  left: `${playPercent}%`,
+                  transform: 'translateX(-50%)',
+                }}
+              />
+            )}
+          </div>
+        </div>
+
+        {/* ★ 拡大時(zoom > 1): 画面の中央(50%)に完全に固定！1ピクセルも左右に動かない！ */}
+        {zoom > 1 && (
+          <div
+            className="absolute top-0 bottom-0 left-1/2 w-0.5 bg-rose-500 pointer-events-none shadow-md z-10"
+            style={{ transform: 'translateX(-50%)' }}
+          />
+        )}
       </div>
     </div>
   );

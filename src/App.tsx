@@ -126,14 +126,22 @@ export default function App() {
 
     clearLoopTimeout();
 
-    const loadedName = await engine.loadFile(file);
-    setFileName(loadedName);
-    setDuration(engine.duration);
-    setCurrentTime(0);
-    setLoopA(0);
-    setLoopB(engine.duration);
-    setFileLoaded(true);
-    setIsPlaying(false);
+    try {
+      const loadedName = await engine.loadFile(file);
+      setFileName(loadedName);
+      setDuration(engine.duration);
+      setCurrentTime(0);
+      setLoopA(0);
+      setLoopB(engine.duration);
+      setFileLoaded(true);
+      setIsPlaying(false);
+    } catch (err) {
+      console.error("Load file error:", err);
+      alert("Failed to load audio file: " + err);
+    } finally {
+      // ★ ファイル入力をリセット（1回目の空振りや同一ファイルの再選択を可能にする）
+      e.target.value = "";
+    }
   };
 
   const togglePlay = async () => {
@@ -348,9 +356,9 @@ export default function App() {
               </div>
             </div>
 
-            {/* ピーク波形シークバー */}
+           {/* ★ ピーク波形シークバー (軽量配列を渡す) */}
             <Waveform
-              audioBuffer={engine?.rawAudioBuffer || null}
+              peaks={engine?.peaks || []}
               currentTime={currentTime}
               duration={duration}
               loopA={loopA}

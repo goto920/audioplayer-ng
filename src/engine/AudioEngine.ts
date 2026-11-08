@@ -12,8 +12,14 @@ export class AudioEngine {
   private ctx: AudioContext | null = null;
   private stretchNode: any = null;
   private gainNode: GainNode | null = null;
-  private audioBuffer: AudioBuffer | null = null;
+  
+  // 生の PCM 配列 (エクスポート用に一時保持するが、切り替え時に完全クリア)
   private channelBuffers: Float32Array[] = [];
+  private sampleRate = 44100;
+  private numberOfChannels = 2;
+
+  // ★ 波形描画用の軽量ピーク配列 (たった数KB) のみ保持
+  public peaks: number[] = [];
 
   // 再生状態
   public isPlaying = false;
@@ -21,7 +27,7 @@ export class AudioEngine {
   public tempo = 1.0;
   public semitones = 0;
   public cents = 0;
-  public volume = -6; // dB
+  public volume = -6;
 
   private callbacks: AudioEngineCallbacks;
 
@@ -29,61 +35,88 @@ export class AudioEngine {
     this.callbacks = callbacks;
   }
 
-  // 波形描画用の AudioBuffer ゲッター
-  public get rawAudioBuffer(): AudioBuffer | null {
-    return this.audioBuffer;
-  }
-
-  // ピッチの合計値 (半音 + セント/100)
   public get totalPitch(): number {
     return this.semitones + (this.cents / 100);
   }
 
-  // AudioContext の初期化 (ユーザー操作直後に呼ぶ)
-  private async ensureContext(): Promise<AudioContext> {
-    if (!this.ctx) {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      this.ctx = new AudioCtx();
-    }
-    if (this.ctx.state === 'suspended') {
-      await this.ctx.resume();
-    }
-    return this.ctx;
-  }
+  // ★ ライブラリの秘密配列と Wasm ヒープを強制解放！
+  public async disposeCurrentSound() {
+    this.pause();
 
-  // 音声ファイルのデコードと Wasm へのバッファ転送
-  public async loadFile(file: File): Promise<string> {
-    const ctx = await this.ensureContext();
-    this.stop();
-
-    const arrayBuffer = await file.arrayBuffer();
-    this.audioBuffer = await ctx.decodeAudioData(arrayBuffer);
-    this.duration = this.audioBuffer.duration;
-
-    // チャンネル配列 (L, R) を抽出
-    this.channelBuffers = [];
-    for (let c = 0; c < this.audioBuffer.numberOfChannels; c++) {
-      this.channelBuffers.push(this.audioBuffer.getChannelData(c));
-    }
-
-    // 既存ノードの破棄
     if (this.stretchNode) {
-      this.stretchNode.disconnect();
+      try {
+        // ★ 核心：Signalsmith 内部に溜まったバッファを強制放出！
+        if (typeof this.stretchNode.dropBuffers === 'function') {
+          await this.stretchNode.dropBuffers();
+        }
+        this.stretchNode.disconnect();
+        if (this.stretchNode.port) {
+          this.stretchNode.port.onmessage = null;
+          this.stretchNode.port.close?.();
+        }
+      } catch (e) {
+        console.warn('dropBuffers error:', e);
+      }
       this.stretchNode = null;
     }
 
-    // Signalsmith Stretch Wasm ノードの生成
-    this.stretchNode = await SignalsmithStretch(ctx);
+    if (this.gainNode) {
+      try {
+        this.gainNode.disconnect();
+      } catch (e) {}
+      this.gainNode = null;
+    }
+
+    if (this.ctx && this.ctx.state !== 'closed') {
+      try {
+        await this.ctx.close();
+      } catch (e) {}
+      this.ctx = null;
+    }
+
+    // 参照を完全に空にする
+    this.channelBuffers = [];
+    this.peaks = [];
+    this.duration = 0;
+  }
+
+  public async loadFile(file: File): Promise<string> {
+    // 1. 前の曲を完全に消去
+    await this.disposeCurrentSound();
+
+    // 2. 新しいコンテキスト
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    this.ctx = new AudioCtx();
+    if (this.ctx.state === 'suspended') {
+      await this.ctx.resume();
+    }
+
+    // 3. デコード
+    const arrayBuffer = await file.arrayBuffer();
+    const decodedAudio = await this.ctx.decodeAudioData(arrayBuffer);
+    this.duration = decodedAudio.duration;
+    this.sampleRate = decodedAudio.sampleRate;
+    this.numberOfChannels = decodedAudio.numberOfChannels;
+
+    // チャンネルデータを抽出
+    this.channelBuffers = [];
+    for (let c = 0; c < this.numberOfChannels; c++) {
+      this.channelBuffers.push(decodedAudio.getChannelData(c));
+    }
+
+    // ★ 4. その場で波形用のピーク（数KB）を一瞬で計算して退避！
+    this.calculatePeaks(this.channelBuffers[0]);
+
+    // 5. Wasm ノード構築
+    this.stretchNode = await SignalsmithStretch(this.ctx);
     await this.stretchNode.addBuffers(this.channelBuffers);
 
-    // ゲインノード接続: Stretch -> Gain -> Destination
-    this.gainNode = ctx.createGain();
+    this.gainNode = this.ctx.createGain();
     this.setVolume(this.volume);
 
     this.stretchNode.connect(this.gainNode);
-    this.gainNode.connect(ctx.destination);
+    this.gainNode.connect(this.ctx.destination);
 
-    // 再生位置の定期コールバック (0.05秒間隔)
     this.stretchNode.setUpdateInterval(0.05, () => {
       if (this.isPlaying && this.stretchNode) {
         const time = this.stretchNode.inputTime;
@@ -98,14 +131,35 @@ export class AudioEngine {
     return file.name;
   }
 
-  // 指定位置から再生開始
+  // ★ 1秒あたり40ポイントの高精細ピーク計算 (メモリ消費はわずか0.1MB!)
+  private calculatePeaks(channelData: Float32Array) {
+    const pointsPerSecond = 40; // 25ミリ秒に1本の高解像度
+    const totalBars = Math.max(600, Math.floor(this.duration * pointsPerSecond));
+    const totalSamples = channelData.length;
+    const blockSize = Math.floor(totalSamples / totalBars);
+    this.peaks = [];
+
+    for (let i = 0; i < totalBars; i++) {
+      const start = i * blockSize;
+      let max = 0;
+      // ブロック内の最大振幅 (アタック) を取得
+      for (let j = 0; j < blockSize; j += 4) {
+        const val = Math.abs(channelData[start + j] || 0);
+        if (val > max) max = val;
+      }
+      // ドラムのアタックのダイナミクスが際立つスケーリング
+      this.peaks.push(Math.pow(max, 0.7));
+    }
+  }
+
   public async play(offsetSec = 0) {
     if (!this.stretchNode || !this.ctx) return;
-    await this.ensureContext();
+    if (this.ctx.state === 'suspended') {
+      await this.ctx.resume();
+    }
 
     const safeOffset = Math.max(0, Math.min(offsetSec, this.duration));
 
-    // Signalsmith に再生スケジュールを送信
     this.stretchNode.schedule({
       output: this.ctx.currentTime,
       active: true,
@@ -117,14 +171,12 @@ export class AudioEngine {
     this.isPlaying = true;
   }
 
-  // 一時停止
   public pause() {
     if (!this.stretchNode) return;
     this.stretchNode.schedule({ active: false });
     this.isPlaying = false;
   }
 
-  // 完全停止
   public stop() {
     this.pause();
     if (this.stretchNode) {
@@ -132,7 +184,6 @@ export class AudioEngine {
     }
   }
 
-  // シーク (再生中ならシームレスに位置ジャンプ)
   public seek(targetSec: number) {
     if (!this.stretchNode) return;
     const safeTarget = Math.max(0, Math.min(targetSec, this.duration));
@@ -143,7 +194,6 @@ export class AudioEngine {
     }
   }
 
-  // テンポ変更 (0.5 ~ 2.0)
   public setTempo(tempo: number) {
     this.tempo = tempo;
     if (this.stretchNode && this.isPlaying) {
@@ -151,7 +201,6 @@ export class AudioEngine {
     }
   }
 
-  // ピッチ変更
   public setPitch(semitones: number, cents: number) {
     this.semitones = semitones;
     this.cents = cents;
@@ -160,49 +209,39 @@ export class AudioEngine {
     }
   }
 
-  // 音量変更 (dB)
   public setVolume(db: number) {
     this.volume = db;
     if (this.gainNode) {
       if (db <= -40) {
-        this.gainNode.gain.value = 0; // 実質ミュート
+        this.gainNode.gain.value = 0;
       } else {
         this.gainNode.gain.value = Math.pow(10, db / 20);
       }
     }
   }
 
-  // 現在位置の取得
   public getCurrentTime(): number {
     return this.stretchNode ? this.stretchNode.inputTime : 0;
   }
 
-  // 高速オフライン書き出し (プレーンな OfflineAudioContext で一瞬で完了)
   public async exportWav(startSec: number, endSec: number): Promise<Blob> {
-    if (!this.audioBuffer || this.channelBuffers.length === 0) {
-      throw new Error("No audio buffer loaded");
-    }
+    if (this.channelBuffers.length === 0) throw new Error("No audio loaded");
 
     const durationToRender = (endSec - startSec) / this.tempo;
-    const sampleRate = this.audioBuffer.sampleRate;
-    const numChannels = this.audioBuffer.numberOfChannels;
-    const totalFrames = Math.ceil(durationToRender * sampleRate);
+    const totalFrames = Math.ceil(durationToRender * this.sampleRate);
 
     const OfflineCtx = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
-    const offlineCtx = new OfflineCtx(numChannels, totalFrames, sampleRate);
+    const offlineCtx = new OfflineCtx(this.numberOfChannels, totalFrames, this.sampleRate);
 
-    // オフライン用 Signalsmith ノード
     const offlineStretch = await SignalsmithStretch(offlineCtx);
     await offlineStretch.addBuffers(this.channelBuffers);
 
-    // ゲインノード (-6dB などの音量もそのまま適用)
     const gainNode = offlineCtx.createGain();
     gainNode.gain.value = this.volume <= -40 ? 0 : Math.pow(10, this.volume / 20);
 
     offlineStretch.connect(gainNode);
     gainNode.connect(offlineCtx.destination);
 
-    // レンダリング予約
     offlineStretch.schedule({
       output: 0,
       active: true,
@@ -211,27 +250,20 @@ export class AudioEngine {
       semitones: this.totalPitch
     });
 
-    // C++ レベルで高速レンダリング
     const renderedAudioBuffer = await offlineCtx.startRendering();
+    await offlineStretch.dropBuffers?.();
     return audioBufferToWavBlob(renderedAudioBuffer);
   }
 
-// 高速オフライン書き出し (MP3版)
   public async exportMp3(startSec: number, endSec: number, kbps = 192): Promise<Blob> {
-    if (!this.audioBuffer || this.channelBuffers.length === 0) {
-      throw new Error("No audio buffer loaded");
-    }
+    if (this.channelBuffers.length === 0) throw new Error("No audio loaded");
 
     const durationToRender = (endSec - startSec) / this.tempo;
-    const sampleRate = this.audioBuffer.sampleRate;
-    const numChannels = this.audioBuffer.numberOfChannels;
-    const totalFrames = Math.ceil(durationToRender * sampleRate);
+    const totalFrames = Math.ceil(durationToRender * this.sampleRate);
 
     const OfflineCtx = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
-    const offlineCtx = new OfflineCtx(numChannels, totalFrames, sampleRate);
+    const offlineCtx = new OfflineCtx(this.numberOfChannels, totalFrames, this.sampleRate);
 
-    // オフライン用 Signalsmith ノード
-    // @ts-ignore
     const offlineStretch = await SignalsmithStretch(offlineCtx);
     await offlineStretch.addBuffers(this.channelBuffers);
 
@@ -250,7 +282,7 @@ export class AudioEngine {
     });
 
     const renderedAudioBuffer = await offlineCtx.startRendering();
-    // ★ ここで MP3 に変換！
+    await offlineStretch.dropBuffers?.();
     return audioBufferToMp3Blob(renderedAudioBuffer, kbps);
   }
 }
