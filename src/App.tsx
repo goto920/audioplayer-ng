@@ -2,8 +2,10 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { 
   Play, Pause, RotateCcw, Volume2, VolumeX, Upload, Globe, 
   RotateCcw as RewindIcon, RotateCw as FastForwardIcon, Repeat, Download, Loader2,
-  ExternalLink, Info, SkipBack
+  ExternalLink, Info, SkipBack, HelpCircle, X, RefreshCw
 } from 'lucide-react';
+// @ts-ignore
+import { useRegisterSW } from 'virtual:pwa-register/react';
 
 import { messages, getDefaultLang, formatTime, checkCompatibility } from './messages';
 import type { Lang } from './messages';
@@ -13,6 +15,15 @@ import { Waveform } from './components/Waveform';
 export default function App() {
   const [lang, setLang] = useState<Lang>(getDefaultLang);
   const t = messages[lang];
+
+  // ★ PWA 自動更新フック (勝手にリロードせず、ユーザーのタップで更新)
+  const {
+    needRefresh: [needRefresh],
+    updateServiceWorker,
+  } = useRegisterSW();
+
+  // ヘルプモーダルの開閉ステート
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
 
   const [isSupported] = useState<boolean>(checkCompatibility);
 
@@ -42,7 +53,6 @@ export default function App() {
   const loopTimeoutRef = useRef<number | null>(null);
   const isWaitingLoopRef = useRef(false);
 
-  // ★ 最新の設定を常に保持する Ref (古いクロージャ問題を完全に根絶)
   const isLoopEnabledRef = useRef(isLoopEnabled);
   const loopARef = useRef(loopA);
   const loopBRef = useRef(loopB);
@@ -52,7 +62,6 @@ export default function App() {
   useEffect(() => { loopBRef.current = loopB; }, [loopB]);
   useEffect(() => { durationRef.current = duration; }, [duration]);
 
-  // 待機タイマーの完全クリア
   const clearLoopTimeout = useCallback(() => {
     if (loopTimeoutRef.current) {
       clearTimeout(loopTimeoutRef.current);
@@ -62,7 +71,6 @@ export default function App() {
     setLoopCountdown(null);
   }, []);
 
-  // ★ A-B ループ終端到達時の処理 (常に最新の Ref を参照)
   const handleEndReached = useCallback(() => {
     if (isWaitingLoopRef.current) return;
 
@@ -86,7 +94,6 @@ export default function App() {
         isWaitingLoopRef.current = false;
         
         if (engineRef.current) {
-          // iPad対策: 再生前にコンテキストを確実に起こして A点からスタート
           await engineRef.current.play(currentA);
           setIsPlaying(true);
         }
@@ -97,7 +104,6 @@ export default function App() {
     }
   }, []);
 
-  // AudioEngine インスタンスの生成
   const engineRef = useRef<AudioEngine | null>(null);
   if (!engineRef.current && isSupported) {
     engineRef.current = new AudioEngine({
@@ -113,7 +119,6 @@ export default function App() {
   }
   const engine = engineRef.current;
 
-  // ループ B点 超過チェック (再生中)
   useEffect(() => {
     if (isPlaying && isLoopEnabled && !isWaitingLoopRef.current && currentTime >= loopB) {
       handleEndReached();
@@ -139,7 +144,6 @@ export default function App() {
       console.error("Load file error:", err);
       alert("Failed to load audio file: " + err);
     } finally {
-      // ★ ファイル入力をリセット（1回目の空振りや同一ファイルの再選択を可能にする）
       e.target.value = "";
     }
   };
@@ -168,7 +172,6 @@ export default function App() {
     engine.seek(time);
   };
 
-  // 頭出し (通常時は 0秒、ABループ時は A点 へ)
   const handleRewindToStart = () => {
     const target = isLoopEnabled ? loopA : 0;
     handleSeek(target);
@@ -240,7 +243,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-4 sm:p-8">
-      <div className="w-full max-w-xl bg-slate-800 rounded-2xl p-6 shadow-xl border border-slate-700 flex flex-col gap-6">
+      <div className="w-full max-w-xl bg-slate-800 rounded-2xl p-6 shadow-xl border border-slate-700 flex flex-col gap-6 relative">
         
         {/* ヘッダー */}
         <div className="flex justify-between items-center border-b border-slate-700 pb-4">
@@ -248,13 +251,25 @@ export default function App() {
             <h1 className="text-xl font-bold tracking-wide">{t.appTitle}</h1>
             <p className="text-xs text-slate-400 mt-0.5">{t.appSub}</p>
           </div>
-          <button
-            onClick={() => setLang(lang === 'ja' ? 'en' : 'ja')}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-700 hover:bg-slate-600 border border-slate-600 transition"
-          >
-            <Globe className="w-3.5 h-3.5 text-slate-300" />
-            <span>{lang === 'ja' ? 'EN' : '日本語'}</span>
-          </button>
+          <div className="flex items-center gap-2">
+            {/* ★ クイックガイド (?) ボタン */}
+            <button
+              onClick={() => setIsHelpOpen(true)}
+              className="p-1.5 text-slate-400 hover:text-indigo-400 hover:bg-slate-700/60 rounded-lg transition"
+              title={t.helpTitle}
+            >
+              <HelpCircle className="w-4 h-4" />
+            </button>
+
+            {/* 言語切り替え */}
+            <button
+              onClick={() => setLang(lang === 'ja' ? 'en' : 'ja')}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-700 hover:bg-slate-600 border border-slate-600 transition"
+            >
+              <Globe className="w-3.5 h-3.5 text-slate-300" />
+              <span>{lang === 'ja' ? 'EN' : '日本語'}</span>
+            </button>
+          </div>
         </div>
 
         {/* 非対応ブラウザ警告 */}
@@ -356,7 +371,7 @@ export default function App() {
               </div>
             </div>
 
-           {/* ★ ピーク波形シークバー (軽量配列を渡す) */}
+            {/* ピーク波形シークバー */}
             <Waveform
               peaks={engine?.peaks || []}
               currentTime={currentTime}
@@ -368,9 +383,8 @@ export default function App() {
             />
 
             {/* 再生コントロール */}
-            <div className="flex justify-center items-center gap-4 py-1">
-
-             <button
+            <div className="flex justify-center items-center gap-3 sm:gap-4 py-1">
+              <button
                 onClick={handleRewindToStart}
                 className="p-2.5 rounded-full bg-slate-700 hover:bg-slate-600 text-slate-200 active:scale-95 transition"
                 title={isLoopEnabled ? "A点へ頭出し" : "先頭へ頭出し"}
@@ -685,6 +699,60 @@ export default function App() {
           <span>Audio Player Next Generation</span>
           <span className="font-mono">{__BUILD_VERSION__}</span>
         </div>
+
+        {/* ★ PWA 新バージョン通知バナー (更新がある時だけ画面下にフワッと表示) */}
+        {needRefresh && (
+          <div className="fixed bottom-4 left-4 right-4 max-w-md mx-auto bg-indigo-600 text-white p-3.5 rounded-xl shadow-2xl flex items-center justify-between gap-3 border border-indigo-400 z-50 animate-bounce">
+            <div className="flex items-center gap-2 text-xs font-semibold">
+              <RefreshCw className="w-4 h-4 animate-spin shrink-0" />
+              <span>{t.newVersionNotice}</span>
+            </div>
+            <button
+              onClick={() => updateServiceWorker(true)}
+              className="px-3 py-1.5 bg-white text-indigo-950 font-bold text-xs rounded-lg hover:bg-indigo-50 shadow active:scale-95 transition shrink-0"
+            >
+              {t.updateBtn}
+            </button>
+          </div>
+        )}
+
+        {/* ★ クイックガイド モーダル (ポップアップ) */}
+        {isHelpOpen && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in">
+            <div className="bg-slate-800 border border-slate-700 w-full max-w-lg rounded-2xl p-6 shadow-2xl flex flex-col gap-5 max-h-[85vh] overflow-y-auto">
+              
+              <div className="flex justify-between items-center border-b border-slate-700 pb-3">
+                <div className="flex items-center gap-2 font-bold text-base text-white">
+                  <HelpCircle className="w-5 h-5 text-indigo-400" />
+                  <span>{t.helpTitle}</span>
+                </div>
+                <button
+                  onClick={() => setIsHelpOpen(false)}
+                  className="p-1 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white transition"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="flex flex-col gap-4 text-xs text-slate-300 leading-relaxed">
+                {t.helpItems.map((item, idx) => (
+                  <div key={idx} className="bg-slate-900/60 p-3.5 rounded-xl border border-slate-700/50">
+                    <div className="font-bold text-indigo-300 text-sm mb-1">{item.title}</div>
+                    <div className="text-slate-400">{item.desc}</div>
+                  </div>
+                ))}
+              </div>
+
+              <button
+                onClick={() => setIsHelpOpen(false)}
+                className="w-full py-2.5 bg-slate-700 hover:bg-slate-600 font-bold text-xs rounded-xl text-white transition active:scale-98"
+              >
+                {t.helpClose}
+              </button>
+
+            </div>
+          </div>
+        )}
 
       </div>
     </div>
