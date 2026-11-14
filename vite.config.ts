@@ -30,25 +30,39 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate', // 新しいビルドが来たらバックグラウンドで自動更新
-      includeAssets: ['favicon.svg'],
+      includeAssets: ['favicon.svg', 'pwa-512x512.png', 'pwa-192x192.png'],
       workbox: {
         // ★ JS/CSS/HTML だけでなく Wasm や画像もすべて端末に強制保存
         globPatterns: ['**/*.{js,css,html,ico,png,svg,wasm}'],
       },
-      manifest: {
+manifest: {
         name: 'Audio Player NG',
         short_name: 'AudioPlayerNG',
-        description: 'Key & Tempo Changer for Drum & Music Practice',
-        theme_color: '#0f172a',      // 背景に合わせたダークトーン (Slate-900)
+        description: 'Key & Tempo Changer for Music Practice',
+        theme_color: '#0f172a',
         background_color: '#0f172a',
-        display: 'standalone',        // ★ ブラウザのアドレスバーを消して全画面アプリ化
-        orientation: 'any',
+        display: 'standalone',
+        orientation: 'portrait', // 練習ツールとして縦向き固定を推奨
+        scope: '.',
+        start_url: '.',
         icons: [
           {
-            src: 'favicon.svg',
-            sizes: 'any',
-            type: 'image/svg+xml',
-            purpose: 'any maskable'
+            src: 'pwa-192x192.png',
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'any'
+          },
+          {
+            src: 'pwa-512x512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'any'
+          },
+          {
+            src: 'pwa-512x512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable' // ★ Androidで丸や四角の形に綺麗に収まるための指定
           }
         ]
       }
