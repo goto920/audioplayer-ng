@@ -13,12 +13,12 @@ export class AudioEngine {
   private stretchNode: any = null;
   private gainNode: GainNode | null = null;
   
-  // 生の PCM 配列 (エクスポート用に一時保持するが、切り替え時に完全クリア)
+  // 生の PCM 配列 (エクスポート用)
   private channelBuffers: Float32Array[] = [];
   private sampleRate = 44100;
   private numberOfChannels = 2;
 
-  // ★ 波形描画用の軽量ピーク配列 (たった数KB) のみ保持
+  // 波形描画用の軽量ピーク配列 (数KB)
   public peaks: number[] = [];
 
   // 再生状態
@@ -39,83 +39,75 @@ export class AudioEngine {
     return this.semitones + (this.cents / 100);
   }
 
-  // ★ ライブラリの秘密配列と Wasm ヒープを強制解放！
+  // ★ AudioContext の初期化 (1つだけ生成して使い回す)
+  private async ensureContext(): Promise<AudioContext> {
+    if (!this.ctx) {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      this.ctx = new AudioCtx();
+    }
+    if (this.ctx.state === 'suspended') {
+      await this.ctx.resume();
+    }
+    return this.ctx;
+  }
+
+  // ★ AudioContext は閉じず、dropBuffers で Wasm メモリのみを完全解放
   public async disposeCurrentSound() {
     this.pause();
 
     if (this.stretchNode) {
       try {
-        // ★ 核心：Signalsmith 内部に溜まったバッファを強制放出！
         if (typeof this.stretchNode.dropBuffers === 'function') {
           await this.stretchNode.dropBuffers();
         }
         this.stretchNode.disconnect();
-        if (this.stretchNode.port) {
-          this.stretchNode.port.onmessage = null;
-          this.stretchNode.port.close?.();
-        }
       } catch (e) {
         console.warn('dropBuffers error:', e);
       }
-      this.stretchNode = null;
     }
 
     if (this.gainNode) {
       try {
         this.gainNode.disconnect();
       } catch (e) {}
-      this.gainNode = null;
     }
 
-    if (this.ctx && this.ctx.state !== 'closed') {
-      try {
-        await this.ctx.close();
-      } catch (e) {}
-      this.ctx = null;
-    }
-
-    // 参照を完全に空にする
     this.channelBuffers = [];
     this.peaks = [];
     this.duration = 0;
   }
 
   public async loadFile(file: File): Promise<string> {
-    // 1. 前の曲を完全に消去
+    const ctx = await this.ensureContext();
     await this.disposeCurrentSound();
 
-    // 2. 新しいコンテキスト
-    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-    this.ctx = new AudioCtx();
-    if (this.ctx.state === 'suspended') {
-      await this.ctx.resume();
-    }
-
-    // 3. デコード
     const arrayBuffer = await file.arrayBuffer();
-    const decodedAudio = await this.ctx.decodeAudioData(arrayBuffer);
+    const decodedAudio = await ctx.decodeAudioData(arrayBuffer);
     this.duration = decodedAudio.duration;
     this.sampleRate = decodedAudio.sampleRate;
     this.numberOfChannels = decodedAudio.numberOfChannels;
 
-    // チャンネルデータを抽出
     this.channelBuffers = [];
     for (let c = 0; c < this.numberOfChannels; c++) {
       this.channelBuffers.push(decodedAudio.getChannelData(c));
     }
 
-    // ★ 4. その場で波形用のピーク（数KB）を一瞬で計算して退避！
+    // 波形ピークの計算
     this.calculatePeaks(this.channelBuffers[0]);
 
-    // 5. Wasm ノード構築
-    this.stretchNode = await SignalsmithStretch(this.ctx);
+    // stretchNode が無ければ作る (Safari で Blob 登録が何度も走るのを防ぐ)
+    if (!this.stretchNode) {
+      this.stretchNode = await SignalsmithStretch(ctx);
+    }
     await this.stretchNode.addBuffers(this.channelBuffers);
 
-    this.gainNode = this.ctx.createGain();
-    this.setVolume(this.volume);
+    if (!this.gainNode) {
+      this.gainNode = ctx.createGain();
+      this.setVolume(this.volume);
+    }
 
     this.stretchNode.connect(this.gainNode);
-    this.gainNode.connect(this.ctx.destination);
+    this.gainNode.connect(ctx.destination);
 
     this.stretchNode.setUpdateInterval(0.05, () => {
       if (this.isPlaying && this.stretchNode) {
@@ -131,9 +123,9 @@ export class AudioEngine {
     return file.name;
   }
 
-  // ★ 1秒あたり40ポイントの高精細ピーク計算 (メモリ消費はわずか0.1MB!)
+  // 1秒あたり40本の高精細ピーク計算
   private calculatePeaks(channelData: Float32Array) {
-    const pointsPerSecond = 40; // 25ミリ秒に1本の高解像度
+    const pointsPerSecond = 40;
     const totalBars = Math.max(600, Math.floor(this.duration * pointsPerSecond));
     const totalSamples = channelData.length;
     const blockSize = Math.floor(totalSamples / totalBars);
@@ -142,12 +134,10 @@ export class AudioEngine {
     for (let i = 0; i < totalBars; i++) {
       const start = i * blockSize;
       let max = 0;
-      // ブロック内の最大振幅 (アタック) を取得
       for (let j = 0; j < blockSize; j += 4) {
         const val = Math.abs(channelData[start + j] || 0);
         if (val > max) max = val;
       }
-      // ドラムのアタックのダイナミクスが際立つスケーリング
       this.peaks.push(Math.pow(max, 0.7));
     }
   }
