@@ -16,11 +16,28 @@ export default function App() {
   const [lang, setLang] = useState<Lang>(getDefaultLang);
   const t = messages[lang];
 
-  // ★ PWA 自動更新フック (勝手にリロードせず、ユーザーのタップで更新)
+// ★ PWA 更新チェック (1時間おき ＆ 画面復帰時にサーバーを見に行く)
   const {
     needRefresh: [needRefresh],
     updateServiceWorker,
-  } = useRegisterSW();
+  } = useRegisterSW({
+    onRegisteredSW(_swUrl, r) {
+      if (!r) return;
+      // ① 1時間ごとにサーバーへ新バージョンを見に行く
+      setInterval(async () => {
+        if (!(!r.installing && navigator)) return;
+        if ('onLine' in navigator && !navigator.onLine) return;
+        await r.update();
+      }, 60 * 60 * 1000);
+
+      // ② スマホで別アプリから戻ってきた（タブが再表示された）瞬間に見に行く
+      document.addEventListener('visibilitychange', async () => {
+        if (document.visibilityState === 'visible' && navigator.onLine) {
+          await r.update();
+        }
+      });
+    },
+  });
 
   // ヘルプモーダルの開閉ステート
   const [isHelpOpen, setIsHelpOpen] = useState(false);
@@ -700,16 +717,19 @@ export default function App() {
           <span className="font-mono">{__BUILD_VERSION__}</span>
         </div>
 
-        {/* ★ PWA 新バージョン通知バナー (更新がある時だけ画面下にフワッと表示) */}
+{/* ★ PWA 新バージョン通知バナー (跳ねるのをやめ、確実に即座にリロード！) */}
         {needRefresh && (
-          <div className="fixed bottom-4 left-4 right-4 max-w-md mx-auto bg-indigo-600 text-white p-3.5 rounded-xl shadow-2xl flex items-center justify-between gap-3 border border-indigo-400 z-50 animate-bounce">
+          <div className="fixed bottom-6 left-4 right-4 max-w-md mx-auto bg-indigo-600 text-white p-3.5 rounded-xl shadow-2xl flex items-center justify-between gap-3 border border-indigo-400 z-50">
             <div className="flex items-center gap-2 text-xs font-semibold">
               <RefreshCw className="w-4 h-4 animate-spin shrink-0" />
               <span>{t.newVersionNotice}</span>
             </div>
             <button
-              onClick={() => updateServiceWorker(true)}
-              className="px-3 py-1.5 bg-white text-indigo-950 font-bold text-xs rounded-lg hover:bg-indigo-50 shadow active:scale-95 transition shrink-0"
+              onClick={async () => {
+                await updateServiceWorker(true);
+                window.location.reload(); // ★ 確実に即座に最新画面へリロード！
+              }}
+              className="cursor-pointer px-3 py-1.5 bg-white text-indigo-950 font-bold text-xs rounded-lg hover:bg-indigo-100 shadow active:scale-95 transition shrink-0"
             >
               {t.updateBtn}
             </button>

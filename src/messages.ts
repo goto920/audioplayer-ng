@@ -38,6 +38,10 @@ export const messages = {
     helpClose: "閉じる",
     helpItems: [
       {
+        title: "📁 使えるファイル ＆ クラウド対応",
+        desc: "PCやスマホの手元にある音声(MP3, WAV, AAC, M4A等)や動画(MP4, WebM等)を読み込めます。iPhoneの「ファイル」やAndroidのピッカー経由で、iCloud、Google ドライブ、Dropbox、OneDrive 上のファイルも直接選択可能。(※YouTube等のストリーミングURL直接再生には非対応です)"
+      },
+      {
         title: "🥁 A-B間ループ ＆ 2秒インターバル",
         desc: "苦手なフレーズの頭で「A点」、終わりで「B点」を押すと自動リピートします。終端に達すると自動で2秒待機してから先頭に戻るため、スティックや楽器を構え直す時間が作れます。"
       },
@@ -95,6 +99,10 @@ export const messages = {
     helpTitle: "Quick User Guide",
     helpClose: "Close",
     helpItems: [
+      {
+        title: "📁 Supported Files & Cloud Storage",
+        desc: "Supports local audio (MP3, WAV, AAC, M4A, etc.) and video files (MP4, WebM, etc.). You can directly select files from iCloud Drive, Google Drive, Dropbox, and OneDrive via your device's file picker. (*Streaming URLs like YouTube are not supported.)"
+      },
       {
         title: "🥁 A-B Repeat with 2-Second Interval",
         desc: "Set 'A' and 'B' to loop difficult phrases. A 2-second pause is automatically inserted between loops so you can reposition your sticks or hands."

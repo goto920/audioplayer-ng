@@ -29,7 +29,7 @@ export default defineConfig({
     react(),
     tailwindcss(),
     VitePWA({
-      registerType: 'autoUpdate', // 新しいビルドが来たらバックグラウンドで自動更新
+      registerType: 'prompt', // 新しいビルドが来たらバックグラウンドで自動更新
       includeAssets: ['favicon.svg', 'pwa-512x512.png', 'pwa-192x192.png'],
       workbox: {
         // ★ JS/CSS/HTML だけでなく Wasm や画像もすべて端末に強制保存
