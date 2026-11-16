@@ -13,15 +13,12 @@ export class AudioEngine {
   private stretchNode: any = null;
   private gainNode: GainNode | null = null;
   
-  // 生の PCM 配列 (エクスポート用)
   private channelBuffers: Float32Array[] = [];
   private sampleRate = 44100;
   private numberOfChannels = 2;
 
-  // 波形描画用の軽量ピーク配列 (数KB)
   public peaks: number[] = [];
 
-  // 再生状態
   public isPlaying = false;
   public duration = 0;
   public tempo = 1.0;
@@ -39,7 +36,6 @@ export class AudioEngine {
     return this.semitones + (this.cents / 100);
   }
 
-  // ★ AudioContext の初期化 (1つだけ生成して使い回す)
   private async ensureContext(): Promise<AudioContext> {
     if (!this.ctx) {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
@@ -51,7 +47,6 @@ export class AudioEngine {
     return this.ctx;
   }
 
-  // ★ AudioContext は閉じず、dropBuffers で Wasm メモリのみを完全解放
   public async disposeCurrentSound() {
     this.pause();
 
@@ -61,9 +56,7 @@ export class AudioEngine {
           await this.stretchNode.dropBuffers();
         }
         this.stretchNode.disconnect();
-      } catch (e) {
-        console.warn('dropBuffers error:', e);
-      }
+      } catch (e) {}
     }
 
     if (this.gainNode) {
@@ -92,10 +85,8 @@ export class AudioEngine {
       this.channelBuffers.push(decodedAudio.getChannelData(c));
     }
 
-    // 波形ピークの計算
     this.calculatePeaks(this.channelBuffers[0]);
 
-    // stretchNode が無ければ作る (Safari で Blob 登録が何度も走るのを防ぐ)
     if (!this.stretchNode) {
       this.stretchNode = await SignalsmithStretch(ctx);
     }
@@ -109,13 +100,18 @@ export class AudioEngine {
     this.stretchNode.connect(this.gainNode);
     this.gainNode.connect(ctx.destination);
 
+    // ★ Safari対策: ロード直後にWasmが安定するよう少しウェイトを置く
+    await new Promise(r => setTimeout(r, 100));
+
     this.stretchNode.setUpdateInterval(0.05, () => {
       if (this.isPlaying && this.stretchNode) {
         const time = this.stretchNode.inputTime;
-        this.callbacks.onTimeUpdate(time);
-        if (time >= this.duration) {
+        // 最初の0.2秒以内の誤爆終了を防ぐガード
+        if (time >= this.duration - 0.05 && time > 1.0) {
           this.pause();
           this.callbacks.onEnded();
+        } else {
+          this.callbacks.onTimeUpdate(time);
         }
       }
     });
@@ -123,7 +119,6 @@ export class AudioEngine {
     return file.name;
   }
 
-  // 1秒あたり40本の高精細ピーク計算
   private calculatePeaks(channelData: Float32Array) {
     const pointsPerSecond = 40;
     const totalBars = Math.max(600, Math.floor(this.duration * pointsPerSecond));
@@ -148,10 +143,13 @@ export class AudioEngine {
       await this.ctx.resume();
     }
 
+    // ★ Safari対策: 再生直前にも微小ウェイトを挟んでWasmの準備を確実にさせる
+    await new Promise(r => setTimeout(r, 30));
+
     const safeOffset = Math.max(0, Math.min(offsetSec, this.duration));
 
     this.stretchNode.schedule({
-      output: this.ctx.currentTime,
+      output: this.ctx.currentTime + 0.05, // 50ms先を指定して安全にスケジューリング
       active: true,
       input: safeOffset,
       rate: this.tempo,
@@ -214,6 +212,7 @@ export class AudioEngine {
     return this.stretchNode ? this.stretchNode.inputTime : 0;
   }
 
+// 修正バージョン
   public async exportWav(startSec: number, endSec: number): Promise<Blob> {
     if (this.channelBuffers.length === 0) throw new Error("No audio loaded");
 
@@ -223,8 +222,12 @@ export class AudioEngine {
     const OfflineCtx = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
     const offlineCtx = new OfflineCtx(this.numberOfChannels, totalFrames, this.sampleRate);
 
-    const offlineStretch = await SignalsmithStretch(offlineCtx);
-    await offlineStretch.addBuffers(this.channelBuffers);
+    // ★ 修正1: チャンネル設定オプションを明示してSafariの自動最適化を防ぐ
+    const offlineStretch = await SignalsmithStretch(offlineCtx, {
+      numberOfInputs: 0,
+      numberOfOutputs: 1,
+      outputChannelCount: [this.numberOfChannels]
+    });
 
     const gainNode = offlineCtx.createGain();
     gainNode.gain.value = this.volume <= -40 ? 0 : Math.pow(10, this.volume / 20);
@@ -232,6 +235,8 @@ export class AudioEngine {
     offlineStretch.connect(gainNode);
     gainNode.connect(offlineCtx.destination);
 
+    await offlineStretch.addBuffers(this.channelBuffers);
+    
     offlineStretch.schedule({
       output: 0,
       active: true,
@@ -239,6 +244,9 @@ export class AudioEngine {
       rate: this.tempo,
       semitones: this.totalPitch
     });
+
+    // ★ 修正2: WebKitのメッセージキューがフラッシュされるのを強制的につなぎ留める
+    await new Promise(resolve => setTimeout(resolve, 50));
 
     const renderedAudioBuffer = await offlineCtx.startRendering();
     await offlineStretch.dropBuffers?.();
@@ -254,8 +262,12 @@ export class AudioEngine {
     const OfflineCtx = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
     const offlineCtx = new OfflineCtx(this.numberOfChannels, totalFrames, this.sampleRate);
 
-    const offlineStretch = await SignalsmithStretch(offlineCtx);
-    await offlineStretch.addBuffers(this.channelBuffers);
+    // ★ 修正1: チャンネル設定オプションを明示
+    const offlineStretch = await SignalsmithStretch(offlineCtx, {
+      numberOfInputs: 0,
+      numberOfOutputs: 1,
+      outputChannelCount: [this.numberOfChannels]
+    });
 
     const gainNode = offlineCtx.createGain();
     gainNode.gain.value = this.volume <= -40 ? 0 : Math.pow(10, this.volume / 20);
@@ -263,6 +275,8 @@ export class AudioEngine {
     offlineStretch.connect(gainNode);
     gainNode.connect(offlineCtx.destination);
 
+    await offlineStretch.addBuffers(this.channelBuffers);
+    
     offlineStretch.schedule({
       output: 0,
       active: true,
@@ -270,6 +284,9 @@ export class AudioEngine {
       rate: this.tempo,
       semitones: this.totalPitch
     });
+
+    // ★ 修正2: メッセージキューのフラッシュ待ち
+    await new Promise(resolve => setTimeout(resolve, 50));
 
     const renderedAudioBuffer = await offlineCtx.startRendering();
     await offlineStretch.dropBuffers?.();

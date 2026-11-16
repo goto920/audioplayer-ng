@@ -25,9 +25,24 @@ export const Waveform: React.FC<WaveformProps> = ({
   const isDraggingRef = useRef(false);
 
   const [zoom, setZoom] = useState<number>(1);
+  const [containerWidth, setContainerWidth] = useState<number>(500);
 
   const baseWidth = 500;
   const currentWidth = baseWidth * zoom;
+
+  // コンテナの実際の画面幅を取得
+  useEffect(() => {
+    if (scrollContainerRef.current) {
+      setContainerWidth(scrollContainerRef.current.clientWidth);
+    }
+    const handleResize = () => {
+      if (scrollContainerRef.current) {
+        setContainerWidth(scrollContainerRef.current.clientWidth);
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // 波形描画
   useEffect(() => {
@@ -74,28 +89,52 @@ export const Waveform: React.FC<WaveformProps> = ({
     }
   }, [peaks, duration, loopA, loopB, isLoopEnabled, zoom]);
 
-  // ★ 再生位置のスクロール追従 (即時・正確追従)
+  // ★ 画面内での赤線のピクセル位置を計算
+  const [redLinePixelX, setRedLinePixelX] = useState<number>(0);
+
   useEffect(() => {
     const container = scrollContainerRef.current;
-    if (!container || zoom === 1 || duration === 0 || isDraggingRef.current) return;
+    if (!container || duration === 0) return;
 
     const playProgress = currentTime / duration;
     const cursorX = playProgress * currentWidth;
-    const containerWidth = container.clientWidth;
+    const maxScrollLeft = currentWidth - containerWidth;
 
-    // 赤線が中央(50%)にあるため、cursorX が画面中央に来るようにスクロール
-    container.scrollLeft = cursorX - containerWidth / 2;
-  }, [currentTime, duration, zoom, currentWidth]);
+    if (zoom === 1) {
+      container.scrollLeft = 0;
+      setRedLinePixelX(playProgress * containerWidth);
+      return;
+    }
 
-  // シーク処理
+    const halfContainer = containerWidth / 2;
+
+    if (cursorX <= halfContainer) {
+      // 【前半】波形は左端、赤線は左から中央へ
+      container.scrollLeft = 0;
+      setRedLinePixelX(cursorX);
+    } else if (cursorX >= maxScrollLeft - halfContainer) {
+      // 【後半】波形は右端、赤線は中央から右端へ
+      container.scrollLeft = maxScrollLeft;
+      const screenX = cursorX - maxScrollLeft;
+      setRedLinePixelX(screenX);
+    } else {
+      // 【中盤】波形が動き、赤線は画面中央に完全固定
+      if (!isDraggingRef.current) {
+        container.scrollLeft = cursorX - halfContainer;
+      }
+      setRedLinePixelX(halfContainer);
+    }
+  }, [currentTime, duration, zoom, currentWidth, containerWidth]);
+
   const handleSeekFromEvent = useCallback((clientX: number) => {
     const container = scrollContainerRef.current;
     if (!container || duration === 0) return;
 
     const rect = container.getBoundingClientRect();
     const clickX = clientX - rect.left + container.scrollLeft;
+    const totalWidth = container.scrollWidth;
 
-    let targetTime = (clickX / currentWidth) * duration;
+    let targetTime = (clickX / totalWidth) * duration;
 
     if (isLoopEnabled) {
       if (targetTime <= loopA) targetTime = loopA;
@@ -114,7 +153,7 @@ export const Waveform: React.FC<WaveformProps> = ({
         container.scrollLeft += 20;
       }
     }
-  }, [duration, isLoopEnabled, loopA, loopB, onSeek, zoom, currentWidth]);
+  }, [duration, isLoopEnabled, loopA, loopB, onSeek, zoom]);
 
   const handleStartDrag = (clientX: number) => {
     isDraggingRef.current = true;
@@ -139,7 +178,6 @@ export const Waveform: React.FC<WaveformProps> = ({
   const zoomReset = () => setZoom(1);
 
   const canvasPixelWidth = Math.min(currentWidth * (zoom > 8 ? 1 : 1.5), 16000);
-  const playPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
     <div className="flex flex-col gap-1.5 w-full">
@@ -180,12 +218,13 @@ export const Waveform: React.FC<WaveformProps> = ({
         </div>
       </div>
 
-      {/* スクロールコンテナの親ラッパー */}
-      <div className="relative w-full h-20 bg-slate-900/90 rounded-xl border border-slate-700/80 overflow-hidden">
-        {/* スクロール領域 */}
+      {/* ★ 親要素を relative にし、スクロール領域と赤線を独立して重ねる */}
+      <div className="relative w-full h-20 bg-slate-900/90 rounded-xl border border-slate-700/80 overflow-hidden select-none">
+        
+        {/* 1. スクロールする波形エリア */}
         <div
           ref={scrollContainerRef}
-          className="w-full h-full overflow-x-auto overflow-y-hidden cursor-pointer select-none"
+          className="w-full h-full overflow-x-auto overflow-y-hidden cursor-pointer"
           onMouseDown={(e) => handleStartDrag(e.clientX)}
           onTouchStart={(e) => {
             isDraggingRef.current = true;
@@ -204,27 +243,17 @@ export const Waveform: React.FC<WaveformProps> = ({
               style={{ width: `${currentWidth}px`, height: '100%' }}
               className="block pointer-events-none"
             />
-
-            {/* 1x表示時のみ、通常の移動シークバーとして描画 */}
-            {zoom === 1 && (
-              <div
-                className="absolute top-0 bottom-0 w-0.5 bg-rose-500 pointer-events-none shadow-sm"
-                style={{
-                  left: `${playPercent}%`,
-                  transform: 'translateX(-50%)',
-                }}
-              />
-            )}
           </div>
         </div>
 
-        {/* ★ 拡大時(zoom > 1): 画面の中央(50%)に完全に固定！1ピクセルも左右に動かない！ */}
-        {zoom > 1 && (
-          <div
-            className="absolute top-0 bottom-0 left-1/2 w-0.5 bg-rose-500 pointer-events-none shadow-md z-10"
-            style={{ transform: 'translateX(-50%)' }}
-          />
-        )}
+        {/* 2. 画面の上にフワッと重ねる「絶対配置の赤線」 (絶対に画面外へ飛び出さない) */}
+        <div
+          className="absolute top-0 bottom-0 w-0.5 bg-rose-500 pointer-events-none shadow-md z-20"
+          style={{
+            left: `${redLinePixelX}px`,
+            transform: 'translateX(-50%)',
+          }}
+        />
       </div>
     </div>
   );

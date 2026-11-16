@@ -268,7 +268,17 @@ export default function App() {
             <h1 className="text-xl font-bold tracking-wide">{t.appTitle}</h1>
             <p className="text-xs text-slate-400 mt-0.5">{t.appSub}</p>
           </div>
-          <div className="flex items-center gap-2">
+
+          <div className="flex items-center gap-1.5">
+           {/* ★ 手動リロード（更新・メモリリセット）ボタン */}
+            <button
+              onClick={() => window.location.reload()}
+              className="p-1.5 text-slate-400 hover:text-indigo-400 hover:bg-slate-700/60 rounded-lg transition"
+              title="アプリを再読み込み (リセット)"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
+
             {/* ★ クイックガイド (?) ボタン */}
             <button
               onClick={() => setIsHelpOpen(true)}
